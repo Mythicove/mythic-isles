@@ -1,0 +1,7 @@
+{
+  "name": "isles-paper-live-test",
+  "private": true,
+  "type": "module",
+  "scripts": { "test:live": "node test/live.mjs" },
+  "devDependencies": { "mineflayer": "4.26.0" }
+}

@@ -58,18 +58,23 @@ type storedConnection struct {
 }
 
 type Config struct {
-	Servers     []Server           `json:"servers"`
-	Connections []storedConnection `json:"connections"`
+	Servers       []Server                       `json:"servers"`
+	Connections   []storedConnection             `json:"connections"`
+	BridgeSecrets map[string]string              `json:"bridgeSecrets,omitempty"`
+	GameLinks     map[string]map[string]GameLink `json:"gameLinks,omitempty"`
+	Tasks         map[string][]BridgeTask        `json:"tasks,omitempty"`
 }
 
 type App struct {
-	mu     sync.Mutex
-	config Config
-	dir    string
-	token  string
-	aead   cipher.AEAD
-	http   *http.Client
-	probes map[string]*probeEntry
+	mu       sync.Mutex
+	config   Config
+	dir      string
+	token    string
+	aead     cipher.AEAD
+	http     *http.Client
+	probes   map[string]*probeEntry
+	bridges  map[string]BridgeSnapshot
+	pairings map[string]pairing
 }
 
 // Open uses one process per data directory. Secrets are encrypted using a separate
@@ -91,6 +96,8 @@ func Open(dir, token, key string) (*App, error) {
 		return nil, err
 	}
 	a := &App{dir: dir, token: token, aead: aead, probes: map[string]*probeEntry{}, http: &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}}
+	a.bridges = map[string]BridgeSnapshot{}
+	a.pairings = map[string]pairing{}
 	a.config = Config{Servers: []Server{}, Connections: []storedConnection{}}
 	data, err := os.ReadFile(filepath.Join(dir, "config.json"))
 	if err == nil {

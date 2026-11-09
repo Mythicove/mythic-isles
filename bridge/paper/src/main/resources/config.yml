@@ -1,0 +1,12 @@
+# The website or the private Isles origin, without /api/isles.
+url: http://127.0.0.1:8095
+server: survival
+# Rotate in /admin/integrations. This is a server-specific Bridge token,
+# NOT the Isles service token and NOT a Mirror login or rescue token.
+token: ''
+# Only server-owner-selected placeholders are evaluated; browsers cannot submit templates.
+placeholders: {}
+# Example (requires the respective installed PAPI expansions):
+# placeholders:
+#   rank: '%luckperms_prefix%'
+#   balance: '%vault_eco_balance_formatted%'

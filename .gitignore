@@ -3,3 +3,5 @@
 /isles.exe
 /isles
 /coverage.out
+**/target/
+**/node_modules/

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 
 func (a *App) Handler() http.Handler {
 	m := http.NewServeMux()
+	a.bridgeRoutes(m)
 	m.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok") })
 	m.HandleFunc("GET /api/isles/servers", a.listPublic)
 	m.HandleFunc("GET /api/isles/servers/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -82,6 +84,11 @@ func (a *App) adminMux() *http.ServeMux {
 	m.HandleFunc("POST /api/isles/admin/servers/{id}/actions/{action}", a.action)
 	m.HandleFunc("GET /api/isles/admin/servers/{id}/logs", a.logs)
 	m.HandleFunc("POST /api/isles/admin/servers/{id}/publish-pack", a.publishPack)
+	m.HandleFunc("POST /api/isles/admin/servers/{id}/bridge-token", a.rotateBridge)
+	m.HandleFunc("GET /api/isles/admin/servers/{id}/bridge", a.bridgeState)
+	m.HandleFunc("GET /api/isles/admin/servers/{id}/tasks", a.listTasks)
+	m.HandleFunc("POST /api/isles/admin/servers/{id}/tasks", a.enqueueTask)
+	m.HandleFunc("GET /api/isles/admin/servers/{id}/identities", a.gameIdentities)
 	return m
 }
 
@@ -135,12 +142,26 @@ func (a *App) deleteServer(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	next := a.config
+	id := r.PathValue("id")
+	next.BridgeSecrets = maps.Clone(next.BridgeSecrets)
+	delete(next.BridgeSecrets, id)
+	next.Tasks = maps.Clone(next.Tasks)
+	delete(next.Tasks, id)
+	next.GameLinks = maps.Clone(next.GameLinks)
+	for player, links := range next.GameLinks {
+		if _, ok := links[id]; ok {
+			copy := maps.Clone(links)
+			delete(copy, id)
+			next.GameLinks[player] = copy
+		}
+	}
 	next.Servers = slices.DeleteFunc(slices.Clone(next.Servers), func(s Server) bool { return s.ID == r.PathValue("id") })
 	if err := a.saveLocked(next); err != nil {
 		failed(w)
 		return
 	}
 	delete(a.probes, r.PathValue("id"))
+	delete(a.bridges, id)
 	a.audit(r, "server.delete", r.PathValue("id"))
 	w.WriteHeader(204)
 }

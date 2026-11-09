@@ -12,3 +12,18 @@ jobs:
       - run: go test -race ./...
       - run: go vet ./...
       - run: go build ./cmd/isles
+  paper-bridge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: maven
+      - run: mvn --batch-mode --no-transfer-progress package
+        working-directory: bridge/paper
+      - uses: actions/upload-artifact@v4
+        with:
+          name: isles-paper-bridge
+          path: bridge/paper/target/isles-paper-bridge-0.1.0.jar
