@@ -10,8 +10,10 @@
     <repository><id>enginehub</id><url>https://maven.enginehub.org/repo/</url></repository>
     <repository><id>jitpack</id><url>https://jitpack.io</url></repository>
     <repository><id>codemc</id><url>https://repo.codemc.io/repository/maven-public/</url></repository>
+    <repository><id>towny</id><url>https://repo.glaremasters.me/repository/towny/</url></repository>
   </repositories>
   <dependencies>
+    <dependency><groupId>com.palmergames.bukkit.towny</groupId><artifactId>towny</artifactId><version>0.103.2.0</version><scope>provided</scope><exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions></dependency>
     <dependency><groupId>com.github.plan-player-analytics</groupId><artifactId>Plan</artifactId><version>5.9.3705</version><scope>provided</scope></dependency>
     <dependency><groupId>org.popcraft</groupId><artifactId>chunky-common</artifactId><version>1.4.40</version><scope>provided</scope></dependency>
     <dependency><groupId>org.spigotmc</groupId><artifactId>spigot-api</artifactId><version>1.21.1-R0.1-SNAPSHOT</version><scope>provided</scope></dependency>

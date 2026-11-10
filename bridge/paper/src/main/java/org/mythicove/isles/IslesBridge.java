@@ -43,6 +43,7 @@ public final class IslesBridge extends JavaPlugin {
     private VaultHook vault;
     private ChunkyHook chunky;
     private PlanHook plan;
+    private TownyHook towny;
 
     @Override public void onEnable() {
         saveDefaultConfig();
@@ -65,6 +66,7 @@ public final class IslesBridge extends JavaPlugin {
         if (enabled("Vault")) vault = new VaultHook();
         if (enabled("Chunky")) chunky = new ChunkyHook();
         if (enabled("Plan")) plan = new PlanHook();
+        if (enabled("Towny")) towny = new TownyHook();
         Bukkit.getScheduler().runTaskTimer(this, this::observe, 20L, 400L);
         getLogger().info("Bridge enabled. Optional data providers are detected from installed plugins.");
     }
@@ -88,7 +90,7 @@ public final class IslesBridge extends JavaPlugin {
             snapshot.put("platform", Bukkit.getName());
             snapshot.put("minecraft", Bukkit.getBukkitVersion());
             Map<String, String> plugins = new LinkedHashMap<>();
-            for (String name : List.of("LuckPerms", "PlaceholderAPI", "spark", "ViaVersion", "WorldGuard", "Vault", "Chunky", "Plan")) {
+            for (String name : List.of("LuckPerms", "PlaceholderAPI", "spark", "ViaVersion", "WorldGuard", "Vault", "Chunky", "Plan", "Towny")) {
                 var plugin = Bukkit.getPluginManager().getPlugin(name);
                 if (plugin != null && plugin.isEnabled()) plugins.put(name, plugin.getDescription().getVersion());
             }
@@ -121,14 +123,22 @@ public final class IslesBridge extends JavaPlugin {
             snapshot.put("players", players);
             network.submit(() -> {
                 try {
-                    if (plan != null) {
+                    if (plan != null || towny != null) {
                         try {
                             var identities = JsonParser.parseString(send("identities", "GET", null)).getAsJsonArray();
                             List<String> uuids = new java.util.ArrayList<>();
                             for (var identity : identities) uuids.add(identity.getAsString());
-                            snapshot.put("plan", plan.collect(uuids));
+                            if (plan != null) {
+                                try { snapshot.put("plan", plan.collect(uuids)); }
+                                catch (Exception unavailable) { getLogger().warning("Plan statistics unavailable; check its database and Query API."); }
+                            }
+                            if (towny != null) {
+                                var collection = Bukkit.getScheduler().callSyncMethod(this, () -> towny.collect(uuids));
+                                try { snapshot.put("towny", collection.get(10, java.util.concurrent.TimeUnit.SECONDS)); }
+                                catch (Exception unavailable) { collection.cancel(false); getLogger().warning("Towny data unavailable; check the provider on the game server."); }
+                            }
                         } catch (Exception unavailable) {
-                            getLogger().warning("Plan statistics unavailable; check its database and Query API.");
+                            getLogger().warning("Verified identity list unavailable; private provider observations omitted.");
                         }
                     }
                     send("heartbeat", "POST", json.toJson(snapshot));

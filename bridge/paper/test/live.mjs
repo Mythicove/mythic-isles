@@ -146,10 +146,49 @@ try {
     capture(game, "paper-restarted");
     await waitFor(async () => Date.parse((await api("admin/servers/live/bridge")).snapshot.receivedAt) > restartedAt, 240_000);
   };
+  let towny = "not-installed";
+  if (currentProviders.Towny) {
+    const membership = () => api("players/website-player/links", "GET", undefined, admin, "website-player");
+    const townless = await waitFor(async () => (await membership())[0]?.towny);
+    assert.equal(townless.town, undefined);
+    game.stdin.write("op IslesTester\n");
+    await pause(1000);
+    bot.chat("/town new IslesHarbor");
+    const mayor = await waitFor(async () => { const value = (await membership())[0]?.towny; return value?.town?.name === "IslesHarbor" && value.mayor && value; });
+    bot.chat("/nation new IslesUnion");
+    const king = await waitFor(async () => { const value = (await membership())[0]?.towny; return value?.town?.nation?.name === "IslesUnion" && value.king && value; });
+    bot.chat("/town toggle open on");
+    await waitFor(async () => (await membership())[0]?.towny?.town?.open);
+    bot.chat("/town toggle public off");
+    await waitFor(async () => (await membership())[0]?.towny?.town?.public === false);
+    const guest = await connectPlayer("TownyGuest");
+    await pause(1000);
+    game.stdin.write("ta town IslesHarbor add TownyGuest\n");
+    await waitFor(async () => (await membership())[0]?.towny?.town?.residents === 2);
+    game.stdin.write("ta set mayor IslesHarbor TownyGuest\n");
+    await waitFor(async () => { const value = (await membership())[0]?.towny; return value?.town && !value.mayor && !value.king; });
+    game.stdin.write("ta town IslesHarbor rank add IslesTester assistant\n");
+    const resident = await waitFor(async () => { const value = (await membership())[0]?.towny; return value?.townRanks?.includes("assistant") && value; });
+    const aggregate = (await api("admin/servers/live/bridge")).snapshot.towny;
+    assert.equal(aggregate.townCount, 1);
+    assert.equal(aggregate.nationCount, 1);
+    assert.equal(aggregate.residents.length, 1, "Unlinked resident was exported");
+    assert.equal(resident.town.claimedTownBlocks >= 1, true);
+    guest.quit();
+    game.stdin.write("deop IslesTester\n");
+    await restartGame();
+    const afterRestart = await waitFor(async () => { const value = (await membership())[0]; return value?.fresh && !value.player && value.towny?.townRanks?.includes("assistant") && value; });
+    assert.equal(afterRestart.towny.town.id, resident.town.id);
+    game.stdin.write("ta town IslesHarbor kick IslesTester\n");
+    const removed = await waitFor(async () => { const value = (await membership())[0]?.towny; return value && !value.town && value; });
+    assert.equal(removed.mayor, false);
+    await writeFile(join(dir, "towny-observations.json"), JSON.stringify({ townless, mayor, king, resident, aggregate, afterRestart, removed }, null, 2));
+    towny = "town-nation-mayor-king-rank-offline-restart-and-removal-observed";
+  }
   let plan = "not-installed";
   if (currentProviders.Plan) {
     await waitFor(async () => (await api("admin/servers/live/bridge")).snapshot.plan);
-    bot.quit(); bot = undefined;
+    bot?.quit(); bot = undefined;
     const activity = await waitFor(async () => (await api("players/website-player/links", "GET", undefined, admin, "website-player"))[0]?.activity);
     assert(activity.sessions >= 1 && activity.playtimeMs > 0);
     const peer = await connectPlayer("UnlinkedGuest");
@@ -217,7 +256,7 @@ try {
     await writeFile(join(dir, "chunky-observations.json"), JSON.stringify({ running, paused, resumed, cancelled, completed, terminalAfterRestart }, null, 2));
     chunky = "generated-paused-restarted-resumed-cancelled-running-and-paused-completed";
   }
-  const manifest = { server: heartbeat.snapshot.platform, minecraft: heartbeat.snapshot.minecraft, heartbeat: true, inGameLink: true, gameName: linked[0].identity.name, whitelist: "applied", member, placeholder, protocols, regions, economy, chunky, plan, providers: Object.keys((await api("admin/servers/live/bridge")).snapshot.plugins).sort() };
+  const manifest = { server: heartbeat.snapshot.platform, minecraft: heartbeat.snapshot.minecraft, heartbeat: true, inGameLink: true, gameName: linked[0].identity.name, whitelist: "applied", member, placeholder, protocols, regions, economy, chunky, plan, towny, providers: Object.keys((await api("admin/servers/live/bridge")).snapshot.plugins).sort() };
   await writeFile(join(dir, "scenario-result.json"), JSON.stringify(manifest, null, 2));
   console.log(JSON.stringify(manifest));
 } finally {

@@ -78,6 +78,9 @@ func TestVerifiedIdentityAndMemberTaskScenario(t *testing.T) {
 	snapshot["players"].([]any)[0].(map[string]any)["economy"] = map[string]any{"provider": "EssentialsX Economy", "balance": 123.44999999999999, "formatted": "$123.44", "currency": "$"}
 	activity := map[string]any{"uuid": identity["uuid"], "sessions": 2, "playtimeMs": 90000, "afkMs": 1000, "firstSeen": "2026-11-10T10:00:00Z", "lastSeen": "2026-11-10T10:01:30Z", "observedAt": "2026-11-10T10:02:00Z"}
 	snapshot["plan"] = map[string]any{"serverUUID": "12345678-1234-1234-1234-123456789012", "recordedPlayers": 1, "sessions": 2, "playtimeMs": 90000, "afkMs": 1000, "observedAt": "2026-11-10T10:02:00Z", "players": []any{activity}}
+	town := map[string]any{"id": "11111111-1111-1111-1111-111111111111", "name": "PrivateHarbor", "residents": 2, "claimedTownBlocks": 1, "open": true, "public": false, "nation": map[string]string{"id": "22222222-2222-2222-2222-222222222222", "name": "Union"}}
+	resident := map[string]any{"uuid": identity["uuid"], "mayor": false, "king": false, "townRanks": []string{"assistant"}, "nationRanks": []string{}, "town": town, "observedAt": "2026-11-10T10:02:00Z"}
+	snapshot["towny"] = map[string]any{"townCount": 101, "nationCount": 1, "towns": []any{town}, "nations": []any{}, "residents": []any{resident}, "observedAt": "2026-11-10T10:02:00Z"}
 	status, b = call("POST", "/api/isles/bridge/survival/heartbeat", bridgeToken, "", snapshot)
 	mustStatus(t, 204, status, b)
 	status, b = call("GET", "/api/isles/players/site-player/links", token, "site-player", nil)
@@ -111,15 +114,53 @@ func TestVerifiedIdentityAndMemberTaskScenario(t *testing.T) {
 	if !bytes.Contains(b, []byte(`"activity"`)) || bytes.Contains(b, []byte(`"player":`)) {
 		t.Fatalf("offline activity missing: %s", b)
 	}
+	if !bytes.Contains(b, []byte(`"name":"PrivateHarbor"`)) || !bytes.Contains(b, []byte(`"assistant"`)) || bytes.Contains(b, []byte(`"townCount"`)) {
+		t.Fatalf("offline Towny projection: %s", b)
+	}
+	status, b = request(t, client, api.URL, "GET", "/api/isles/servers", nil, false)
+	mustStatus(t, 200, status, b)
+	if bytes.Contains(b, []byte("PrivateHarbor")) || bytes.Contains(b, []byte("towny")) {
+		t.Fatal("Towny leaked into public directory")
+	}
 	status, b = call("GET", "/api/isles/players/unlinked/links", token, "unlinked", nil)
 	mustStatus(t, 200, status, b)
-	if bytes.Contains(b, []byte("playtimeMs")) {
+	if bytes.Contains(b, []byte("playtimeMs")) || bytes.Contains(b, []byte("PrivateHarbor")) {
 		t.Fatal("Plan activity disclosed to unlinked owner")
 	}
 	activity["playtimeMs"] = -1
 	status, b = call("POST", "/api/isles/bridge/survival/heartbeat", bridgeToken, "", snapshot)
 	mustStatus(t, 400, status, b)
 	activity["playtimeMs"] = 90000
+	resident["townRanks"] = []string{""}
+	status, b = call("POST", "/api/isles/bridge/survival/heartbeat", bridgeToken, "", snapshot)
+	mustStatus(t, 400, status, b)
+	resident["townRanks"] = []string{}
+	towny := snapshot["towny"].(map[string]any)
+	towns := towny["towns"]
+	towny["towns"] = nil
+	status, b = call("POST", "/api/isles/bridge/survival/heartbeat", bridgeToken, "", snapshot)
+	mustStatus(t, 400, status, b)
+	towny["towns"] = towns
+	resident["townRanks"] = nil
+	status, b = call("POST", "/api/isles/bridge/survival/heartbeat", bridgeToken, "", snapshot)
+	mustStatus(t, 400, status, b)
+	resident["townRanks"] = []string{}
+	delete(resident, "town")
+	status, b = call("POST", "/api/isles/bridge/survival/heartbeat", bridgeToken, "", snapshot)
+	mustStatus(t, 204, status, b)
+	status, b = call("GET", "/api/isles/players/site-player/links", token, "site-player", nil)
+	mustStatus(t, 200, status, b)
+	if !bytes.Contains(b, []byte(`"towny":`)) || bytes.Contains(b, []byte("PrivateHarbor")) {
+		t.Fatal("former membership retained")
+	}
+	delete(snapshot, "towny")
+	status, b = call("POST", "/api/isles/bridge/survival/heartbeat", bridgeToken, "", snapshot)
+	mustStatus(t, 204, status, b)
+	status, b = call("GET", "/api/isles/players/site-player/links", token, "site-player", nil)
+	mustStatus(t, 200, status, b)
+	if bytes.Contains(b, []byte(`"towny":`)) {
+		t.Fatal("unavailable Towny provider became townless")
+	}
 	status, b = request(t, client, api.URL, "POST", "/api/isles/admin/servers/survival/tasks", map[string]any{"player": "site-player", "kind": "member", "group": "member", "grant": true}, true)
 	mustStatus(t, 200, status, b)
 	var task struct {
@@ -156,7 +197,7 @@ func TestVerifiedIdentityAndMemberTaskScenario(t *testing.T) {
 	}
 	status, b = request(t, client, api.URL, "GET", "/api/isles/servers", nil, false)
 	mustStatus(t, 200, status, b)
-	for _, secret := range []string{bridgeToken, identity["uuid"], "balance", "plan", "playtimeMs"} {
+	for _, secret := range []string{bridgeToken, identity["uuid"], "balance", "plan", "playtimeMs", "towny", "PrivateHarbor"} {
 		if bytes.Contains(b, []byte(secret)) {
 			t.Fatal("bridge/private profile leaked publicly")
 		}

@@ -56,6 +56,7 @@ type BridgeSnapshot struct {
 	ProtocolVersions []string          `json:"protocolVersions,omitempty"`
 	Chunky           []ChunkyWorld     `json:"chunky,omitempty"`
 	Plan             *PlanSnapshot     `json:"plan,omitempty"`
+	Towny            *TownySnapshot    `json:"towny,omitempty"`
 }
 type pairing struct {
 	Player  string
@@ -155,6 +156,10 @@ func (a *App) heartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := validatePlanSnapshot(snapshot.Plan); err != nil {
+		bad(w, err)
+		return
+	}
+	if err := validateTownySnapshot(snapshot.Towny); err != nil {
 		bad(w, err)
 		return
 	}
@@ -302,6 +307,14 @@ func (a *App) playerLinks(w http.ResponseWriter, r *http.Request) {
 				if p.UUID == link.UUID {
 					item["player"] = p
 					break
+				}
+			}
+			if snapshot.Towny != nil {
+				for _, resident := range snapshot.Towny.Residents {
+					if resident.UUID == link.UUID {
+						item["towny"] = resident
+						break
+					}
 				}
 			}
 		}
