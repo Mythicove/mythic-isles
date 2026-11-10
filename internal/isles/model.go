@@ -28,19 +28,25 @@ type Link struct {
 }
 
 type Server struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	Description  string `json:"description"`
-	Address      string `json:"address"`
-	Edition      string `json:"edition"` // java or bedrock
-	CoverURL     string `json:"coverUrl,omitempty"`
-	Links        []Link `json:"links"`
-	Published    bool   `json:"published"`
-	ConnectionID string `json:"connectionId,omitempty"`
-	DaemonID     string `json:"daemonId,omitempty"`
-	InstanceID   string `json:"instanceId,omitempty"`
-	PackwizURL   string `json:"packwizUrl,omitempty"`
-	PackVersion  string `json:"packVersion,omitempty"`
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	Description  string    `json:"description"`
+	Address      string    `json:"address"`
+	Edition      string    `json:"edition"` // java or bedrock
+	CoverURL     string    `json:"coverUrl,omitempty"`
+	Links        []Link    `json:"links"`
+	Published    bool      `json:"published"`
+	ConnectionID string    `json:"connectionId,omitempty"`
+	DaemonID     string    `json:"daemonId,omitempty"`
+	InstanceID   string    `json:"instanceId,omitempty"`
+	PackwizURL   string    `json:"packwizUrl,omitempty"`
+	PackVersion  string    `json:"packVersion,omitempty"`
+	Map          *WorldMap `json:"map,omitempty"`
+}
+
+type WorldMap struct {
+	Kind string `json:"kind"`
+	URL  string `json:"url"`
 }
 
 type Connection struct {
@@ -185,6 +191,19 @@ func validURL(raw string) error {
 }
 
 func validateServer(s Server) error {
+	if s.Map != nil {
+		if s.Map.Kind != "bluemap" && s.Map.Kind != "squaremap" && s.Map.Kind != "dynmap" {
+			return errors.New("map kind must be bluemap, squaremap or dynmap")
+		}
+		u, err := url.Parse(s.Map.URL)
+		if err != nil {
+			return errors.New("invalid map URL")
+		}
+		u.Fragment = ""
+		if err := validURL(u.String()); err != nil {
+			return err
+		}
+	}
 	if !idPattern.MatchString(s.ID) || strings.TrimSpace(s.Name) == "" || len(s.Name) > 120 || len(s.Description) > 4000 {
 		return errors.New("invalid server id, name or description")
 	}

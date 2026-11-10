@@ -5,6 +5,7 @@ Optional self-hosted Minecraft server directory and integration service for Myth
 ## Implemented
 
 - Persistent published/draft servers with Java or Bedrock connection addresses.
+- Optional BlueMap/squaremap/Dynmap browser URL configuration, preserving saved camera fragments. The Web application owns embedding and its exact-origin CSP; Isles does not proxy map tiles or claim marker integration.
 - Java SLP and Bedrock RakNet status, shared 20-second observations with timestamps.
 - MCSManager: discover instances, runtime, start/stop/restart, commands, bounded recent logs.
 - Pterodactyl Client API: discover servers, resource status, power and commands.
