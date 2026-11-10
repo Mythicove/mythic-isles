@@ -76,6 +76,8 @@ func TestVerifiedIdentityAndMemberTaskScenario(t *testing.T) {
 	snapshot["protocolVersions"] = []string{"1.21.1"}
 	snapshot["players"] = []any{map[string]any{"uuid": identity["uuid"], "name": "Alice", "group": "member", "values": map[string]string{"balance": "12.00"}, "clientVersion": "1.21.1", "regions": []any{map[string]any{"id": "home", "world": "world", "role": "member", "centerX": 5, "centerY": 70, "centerZ": 5}}}}
 	snapshot["players"].([]any)[0].(map[string]any)["economy"] = map[string]any{"provider": "EssentialsX Economy", "balance": 123.44999999999999, "formatted": "$123.44", "currency": "$"}
+	player := snapshot["players"].([]any)[0].(map[string]any)
+	player["voicechat"] = map[string]any{"installed": true, "connected": true, "disabled": false}
 	activity := map[string]any{"uuid": identity["uuid"], "sessions": 2, "playtimeMs": 90000, "afkMs": 1000, "firstSeen": "2026-11-10T10:00:00Z", "lastSeen": "2026-11-10T10:01:30Z", "observedAt": "2026-11-10T10:02:00Z"}
 	snapshot["plan"] = map[string]any{"serverUUID": "12345678-1234-1234-1234-123456789012", "recordedPlayers": 1, "sessions": 2, "playtimeMs": 90000, "afkMs": 1000, "observedAt": "2026-11-10T10:02:00Z", "players": []any{activity}}
 	town := map[string]any{"id": "11111111-1111-1111-1111-111111111111", "name": "PrivateHarbor", "residents": 2, "claimedTownBlocks": 1, "open": true, "public": false, "nation": map[string]string{"id": "22222222-2222-2222-2222-222222222222", "name": "Union"}}
@@ -104,6 +106,38 @@ func TestVerifiedIdentityAndMemberTaskScenario(t *testing.T) {
 	}
 	if !bytes.Contains(b, []byte(`"activity"`)) || !bytes.Contains(b, []byte(`"playtimeMs":90000`)) || bytes.Contains(b, []byte("recordedPlayers")) {
 		t.Fatalf("private Plan projection: %s", b)
+	}
+	if !bytes.Contains(b, []byte(`"voicechat":{"installed":true,"connected":true,"disabled":false}`)) {
+		t.Fatalf("voice state missing or rewritten: %s", b)
+	}
+	status, b = call("GET", "/api/isles/players/site-player/links", token, "another-player", nil)
+	mustStatus(t, 401, status, b)
+	status, b = call("GET", "/api/isles/players/unlinked/links", token, "unlinked", nil)
+	mustStatus(t, 200, status, b)
+	if bytes.Contains(b, []byte("voicechat")) {
+		t.Fatal("voice state disclosed to unlinked owner")
+	}
+	status, b = request(t, client, api.URL, "GET", "/api/isles/servers", nil, false)
+	mustStatus(t, 200, status, b)
+	if bytes.Contains(b, []byte("voicechat")) {
+		t.Fatal("live voice state leaked publicly")
+	}
+	player["voicechat"] = map[string]any{"installed": "yes", "connected": true, "disabled": false}
+	status, b = call("POST", "/api/isles/bridge/survival/heartbeat", bridgeToken, "", snapshot)
+	mustStatus(t, 400, status, b)
+	player["voicechat"] = map[string]any{"installed": true, "connected": true}
+	status, b = call("POST", "/api/isles/bridge/survival/heartbeat", bridgeToken, "", snapshot)
+	mustStatus(t, 400, status, b)
+	player["voicechat"] = map[string]any{"installed": true, "connected": true, "disabled": nil}
+	status, b = call("POST", "/api/isles/bridge/survival/heartbeat", bridgeToken, "", snapshot)
+	mustStatus(t, 400, status, b)
+	delete(player, "voicechat")
+	status, b = call("POST", "/api/isles/bridge/survival/heartbeat", bridgeToken, "", snapshot)
+	mustStatus(t, 204, status, b)
+	status, b = call("GET", "/api/isles/players/site-player/links", token, "site-player", nil)
+	mustStatus(t, 200, status, b)
+	if bytes.Contains(b, []byte("voicechat")) || !bytes.Contains(b, []byte(`"player":`)) {
+		t.Fatal("unavailable voice provider became a disconnected observation")
 	}
 	// Persisted activity is independent of the online Bukkit player list.
 	snapshot["players"] = []any{}

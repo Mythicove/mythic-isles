@@ -29,6 +29,12 @@ type PlayerSnapshot struct {
 	RegionsTruncated bool              `json:"regionsTruncated,omitempty"`
 	Economy          *GameEconomy      `json:"economy,omitempty"`
 	Connection       *GameConnection   `json:"connection,omitempty"`
+	Voicechat        *GameVoicechat    `json:"voicechat,omitempty"`
+}
+type GameVoicechat struct {
+	Installed *bool `json:"installed"`
+	Connected *bool `json:"connected"`
+	Disabled  *bool `json:"disabled"`
 }
 type GameEconomy struct {
 	Provider  string  `json:"provider"`
@@ -178,6 +184,10 @@ func (a *App) heartbeat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for _, p := range snapshot.Players {
+		if p.Voicechat != nil && (p.Voicechat.Installed == nil || p.Voicechat.Connected == nil || p.Voicechat.Disabled == nil) {
+			bad(w, errors.New("incomplete voice observation"))
+			return
+		}
 		if p.Connection != nil && (p.Connection.Edition != "bedrock" || !slices.Contains([]string{"geyser", "floodgate"}, p.Connection.Provider) || p.Connection.Version == "" || len(p.Connection.Version) > 120) {
 			bad(w, errors.New("invalid game connection"))
 			return

@@ -25,7 +25,7 @@ const binary = join(dir, process.platform === "win32" ? "isles.exe" : "isles");
 const build = spawnSync("go", ["build", "-o", binary, "./cmd/isles"], { cwd: root, env: { ...process.env, GOWORK: "off" }, stdio: "inherit" });
 if (build.status !== 0) throw new Error("Build Isles before live scenario failed");
 const service = spawn(binary, [], { env: { ...process.env, ISLES_LISTEN: `127.0.0.1:${servicePort}`, ISLES_DATA_DIR: join(dir, "data"), ISLES_ADMIN_TOKEN: admin, ISLES_SECRET_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" } });
-let game, bot, bedrock;
+let game, bot, bedrock, voiceClient;
 const outputs = [];
 const capture = (p, name) => { for (const stream of [p.stdout, p.stderr]) stream?.on("data", (data) => { const text = data.toString(); outputs.push(`[${name}] ${text}`); if (/ERROR|Exception|Done \(/.test(text)) console.log(text); }); };
 capture(service, "isles");
@@ -63,11 +63,15 @@ try {
     for (const name of await readdir(process.env.ISLES_TEST_PLUGIN_DIR)) if (name.endsWith(".jar") && (!selected || selected.includes(name))) await copyFile(join(process.env.ISLES_TEST_PLUGIN_DIR, name), join(work, "plugins", name));
   }
   await writeFile(join(work, "eula.txt"), "eula=true\n");
-  await writeFile(join(work, "server.properties"), `server-ip=127.0.0.1\nserver-port=${gamePort}\nonline-mode=false\nenforce-secure-profile=false\nspawn-protection=0\nview-distance=2\nsimulation-distance=2\ngenerate-structures=false\nmax-players=5\n`);
+  await writeFile(join(work, "server.properties"), `server-ip=127.0.0.1\nserver-port=${gamePort}\nonline-mode=false\nenforce-secure-profile=false\nspawn-protection=0\nview-distance=2\nsimulation-distance=2\ngenerate-structures=false\nspawn-monsters=false\nspawn-animals=false\nspawn-npcs=false\nmax-players=5\n`);
   await writeFile(join(work, "plugins", "MythicIsles", "config.yml"), `url: '${origin}'\nserver: live\ntoken: '${secret.token}'\nplaceholders:\n  server_name: '%server_name%'\n`);
   if ((await readdir(join(work, "plugins"))).includes("Plan.jar")) {
     await mkdir(join(work, "plugins", "Plan"), { recursive: true });
     await writeFile(join(work, "plugins", "Plan", "config.yml"), `Webserver:\n  Internal_IP: 127.0.0.1\n  Port: ${await freePort()}\nData_gathering:\n  Geolocations: false\nPlugin:\n  Update_notifications:\n    Check_for_updates: false\n`);
+  }
+  if ((await readdir(join(work, "plugins"))).includes("voicechat.jar")) {
+    await mkdir(join(work, "plugins", "voicechat"), { recursive: true });
+    await writeFile(join(work, "plugins", "voicechat", "voicechat-server.properties"), `bind_address=127.0.0.1\nport=${await freePort()}\nkeep_alive=1000\n`);
   }
   if ((await readdir(join(work, "plugins"))).includes("Geyser-Spigot.jar")) {
     const floodgate = (await readdir(join(work, "plugins"))).includes("floodgate-spigot.jar");
@@ -101,6 +105,27 @@ try {
     member = "granted-and-revoked";
   }
   const currentProviders = (await api("admin/servers/live/bridge")).snapshot.plugins;
+  let voicechat = "not-installed";
+  if (currentProviders.voicechat) {
+    const profile = async () => (await api("players/website-player/links", "GET", undefined, admin, "website-player"))[0];
+    const noClient = await waitFor(async () => { const value = (await profile()).player?.voicechat; return value && !value.installed && !value.connected && value; });
+    const { connectVoicechat } = await import("./voicechat-client.mjs");
+    voiceClient = await connectVoicechat(bot);
+    voiceClient.setDisabled(false);
+    const connected = await waitFor(async () => { const value = (await profile()).player?.voicechat; return value?.installed && value.connected && !value.disabled && value; });
+    voiceClient.setDisabled(true);
+    const disabled = await waitFor(async () => { const value = (await profile()).player?.voicechat; return value?.connected && value.disabled && value; });
+    voiceClient.setDisabled(false);
+    await waitFor(async () => (await profile()).player?.voicechat?.disabled === false);
+    voiceClient.close(); voiceClient = undefined;
+    const disconnected = await waitFor(async () => { const value = (await profile()).player?.voicechat; return value?.installed && !value.connected && value; });
+    bot.quit(); bot = undefined;
+    await waitFor(async () => !(await profile()).player);
+    await writeFile(join(dir, "voicechat-observations.json"), JSON.stringify({ noClient, connected, disabled, disconnected, offline: "player-observation-removed", scope: "protocol-only-loopback-no-microphone-or-audio-playback" }, null, 2));
+    bot = await connectPlayer("IslesTester");
+    await waitFor(async () => { const value = (await profile()).player?.voicechat; return value && !value.installed && !value.connected; });
+    voicechat = "no-client-udp-auth-connect-disable-enable-timeout-offline-and-reconnect-observed";
+  }
   let crossplay = "not-installed";
   if (currentProviders["Geyser-Spigot"]) {
     const versions = await waitFor(async () => (await api("admin/servers/live/bridge")).snapshot.crossplay);
@@ -297,10 +322,11 @@ try {
     await writeFile(join(dir, "chunky-observations.json"), JSON.stringify({ running, paused, resumed, cancelled, completed, terminalAfterRestart }, null, 2));
     chunky = "generated-paused-restarted-resumed-cancelled-running-and-paused-completed";
   }
-  const manifest = { server: heartbeat.snapshot.platform, minecraft: heartbeat.snapshot.minecraft, heartbeat: true, inGameLink: true, gameName: linked[0].identity.name, whitelist: "applied", member, placeholder, protocols, regions, economy, chunky, plan, towny, crossplay, providers: Object.keys((await api("admin/servers/live/bridge")).snapshot.plugins).sort() };
+  const manifest = { server: heartbeat.snapshot.platform, minecraft: heartbeat.snapshot.minecraft, heartbeat: true, inGameLink: true, gameName: linked[0].identity.name, whitelist: "applied", member, placeholder, protocols, regions, economy, chunky, plan, towny, crossplay, voicechat, providers: Object.keys((await api("admin/servers/live/bridge")).snapshot.plugins).sort() };
   await writeFile(join(dir, "scenario-result.json"), JSON.stringify(manifest, null, 2));
   console.log(JSON.stringify(manifest));
 } finally {
+  voiceClient?.close();
   bedrock?.disconnect();
   bot?.quit();
   if (game && game.exitCode === null) {

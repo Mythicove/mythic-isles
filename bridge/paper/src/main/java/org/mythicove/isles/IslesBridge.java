@@ -46,6 +46,7 @@ public final class IslesBridge extends JavaPlugin {
     private TownyHook towny;
     private GeyserHook geyser;
     private FloodgateHook floodgate;
+    private VoicechatHook voicechat;
 
     @Override public void onEnable() {
         saveDefaultConfig();
@@ -71,6 +72,7 @@ public final class IslesBridge extends JavaPlugin {
         if (enabled("Towny")) towny = new TownyHook();
         if (enabled("Geyser-Spigot")) geyser = new GeyserHook();
         if (enabled("floodgate")) floodgate = new FloodgateHook();
+        if (enabled("voicechat")) voicechat = new VoicechatHook();
         Bukkit.getScheduler().runTaskTimer(this, this::observe, 20L, 400L);
         getLogger().info("Bridge enabled. Optional data providers are detected from installed plugins.");
     }
@@ -94,7 +96,7 @@ public final class IslesBridge extends JavaPlugin {
             snapshot.put("platform", Bukkit.getName());
             snapshot.put("minecraft", Bukkit.getBukkitVersion());
             Map<String, String> plugins = new LinkedHashMap<>();
-            for (String name : List.of("LuckPerms", "PlaceholderAPI", "spark", "ViaVersion", "WorldGuard", "Vault", "Chunky", "Plan", "Towny", "Geyser-Spigot", "floodgate")) {
+            for (String name : List.of("LuckPerms", "PlaceholderAPI", "spark", "ViaVersion", "WorldGuard", "Vault", "Chunky", "Plan", "Towny", "Geyser-Spigot", "floodgate", "voicechat")) {
                 var plugin = Bukkit.getPluginManager().getPlugin(name);
                 if (plugin != null && plugin.isEnabled()) plugins.put(name, plugin.getDescription().getVersion());
             }
@@ -111,6 +113,7 @@ public final class IslesBridge extends JavaPlugin {
                 value.put("uuid", p.getUniqueId().toString()); value.put("name", p.getName());
                 var connection = bedrockConnection(p.getUniqueId());
                 if (connection != null) value.put("connection", connection);
+                if (voicechat != null) { var voice = voicechat.player(p.getUniqueId()); if (voice != null) value.put("voicechat", voice); }
                 if (luckPerms != null) { value.put("group", luckPerms.primaryGroup(p.getUniqueId())); value.put("groups", luckPerms.playerGroups(p.getUniqueId())); }
                 if (viaVersion != null) value.put("clientVersion", viaVersion.playerVersion(p.getUniqueId()));
                 if (worldGuard != null) { var result = worldGuard.regions(p); value.put("regions", result.regions()); value.put("regionsTruncated", result.truncated()); }
