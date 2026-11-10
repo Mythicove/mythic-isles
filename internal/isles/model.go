@@ -75,6 +75,7 @@ type App struct {
 	probes   map[string]*probeEntry
 	bridges  map[string]BridgeSnapshot
 	pairings map[string]pairing
+	catalog  catalogClient
 }
 
 // Open uses one process per data directory. Secrets are encrypted using a separate
@@ -98,6 +99,9 @@ func Open(dir, token, key string) (*App, error) {
 	a := &App{dir: dir, token: token, aead: aead, probes: map[string]*probeEntry{}, http: &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}}
 	a.bridges = map[string]BridgeSnapshot{}
 	a.pairings = map[string]pairing{}
+	if err := a.catalog.init(); err != nil {
+		return nil, err
+	}
 	a.config = Config{Servers: []Server{}, Connections: []storedConnection{}}
 	data, err := os.ReadFile(filepath.Join(dir, "config.json"))
 	if err == nil {

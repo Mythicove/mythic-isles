@@ -10,10 +10,13 @@ Optional self-hosted Minecraft server directory and integration service for Myth
 - Pterodactyl Client API: discover servers, resource status, power and commands.
 - Prometheus exporter: selected server-level metrics through the authenticated admin API.
 - packwiz 1.1 source publication to content-addressed `.mrpack`: verifies index, metadata and file hashes; preserves sides, optional environments and overrides.
+- Fixed-origin Modrinth and Hangar catalog search for self-hosted launchers and site content; no arbitrary upstream proxy.
 - Connection secrets encrypted with AES-256-GCM using a deployment key kept outside the data directory. Tokens are never returned by configuration APIs.
 - Paper-compatible Java 21 Bridge: one-time verified game identity linking, owner-only profile data, durable whitelist and global LuckPerms membership tasks, optional PlaceholderAPI and spark observations. See `bridge/paper/README.md` for tested versions and live scenario.
 
 These adapters have HTTP/TCP/UDP protocol scenario coverage. Installed panel/plugin versions still need deployment-specific verification. Pterodactyl's WebSocket console and MCSManager SSO/live streams are not implemented here yet.
+
+Catalog search and version discovery use the official Modrinth and Hangar origins, identify the source in every result, send a project-specific User-Agent, and bound upstream responses to 2 MiB. Modrinth loader and game-version filters are ANDed; Hangar version artifacts retain platform-specific hashes. Results contain publisher-declared hashes, not a claim that Isles downloaded and verified those files. The service keeps at most 16 one-minute response cache entries and admits at most 60 upstream calls/minute per process; cached requests do not consume the budget. Configure `ISLES_MODRINTH_URL`/`ISLES_HANGAR_URL` only on the service host if using a compatible mirror. Browsers cannot select arbitrary origins. `node scripts/catalog-smoke.mjs` runs the live metadata check against both official services without downloading binaries.
 
 ## Run
 
