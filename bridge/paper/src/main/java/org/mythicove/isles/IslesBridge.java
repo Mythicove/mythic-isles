@@ -40,6 +40,7 @@ public final class IslesBridge extends JavaPlugin {
     private SparkHook spark;
     private ViaVersionHook viaVersion;
     private WorldGuardHook worldGuard;
+    private VaultHook vault;
 
     @Override public void onEnable() {
         saveDefaultConfig();
@@ -59,6 +60,7 @@ public final class IslesBridge extends JavaPlugin {
         if (enabled("PlaceholderAPI")) placeholders = new PlaceholderHook();
         if (enabled("ViaVersion")) viaVersion = new ViaVersionHook();
         if (enabled("WorldGuard")) worldGuard = new WorldGuardHook();
+        if (enabled("Vault")) vault = new VaultHook();
         Bukkit.getScheduler().runTaskTimer(this, this::observe, 20L, 400L);
         getLogger().info("Bridge enabled. Optional data providers are detected from installed plugins.");
     }
@@ -81,7 +83,7 @@ public final class IslesBridge extends JavaPlugin {
             snapshot.put("platform", Bukkit.getName());
             snapshot.put("minecraft", Bukkit.getBukkitVersion());
             Map<String, String> plugins = new LinkedHashMap<>();
-            for (String name : List.of("LuckPerms", "PlaceholderAPI", "spark", "ViaVersion", "WorldGuard")) {
+            for (String name : List.of("LuckPerms", "PlaceholderAPI", "spark", "ViaVersion", "WorldGuard", "Vault")) {
                 var plugin = Bukkit.getPluginManager().getPlugin(name);
                 if (plugin != null && plugin.isEnabled()) plugins.put(name, plugin.getDescription().getVersion());
             }
@@ -97,6 +99,7 @@ public final class IslesBridge extends JavaPlugin {
                 if (luckPerms != null) { value.put("group", luckPerms.primaryGroup(p.getUniqueId())); value.put("groups", luckPerms.playerGroups(p.getUniqueId())); }
                 if (viaVersion != null) value.put("clientVersion", viaVersion.playerVersion(p.getUniqueId()));
                 if (worldGuard != null) { var result = worldGuard.regions(p); value.put("regions", result.regions()); value.put("regionsTruncated", result.truncated()); }
+                if (vault != null) { var balance = vault.balance(p); if (balance != null) value.put("economy", balance); }
                 if (placeholders != null && templates != null) {
                     Map<String, String> values = new LinkedHashMap<>();
                     templates.getKeys(false).stream().limit(40).forEach(key -> {

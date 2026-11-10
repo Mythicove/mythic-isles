@@ -27,6 +27,13 @@ type PlayerSnapshot struct {
 	ClientVersion    string            `json:"clientVersion,omitempty"`
 	Regions          []GameRegion      `json:"regions,omitempty"`
 	RegionsTruncated bool              `json:"regionsTruncated,omitempty"`
+	Economy          *GameEconomy      `json:"economy,omitempty"`
+}
+type GameEconomy struct {
+	Provider  string  `json:"provider"`
+	Balance   float64 `json:"balance"`
+	Formatted string  `json:"formatted"`
+	Currency  string  `json:"currency"`
 }
 type GameRegion struct {
 	ID      string `json:"id"`
@@ -139,6 +146,10 @@ func (a *App) heartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, p := range snapshot.Players {
+		if p.Economy != nil && (len(p.Economy.Provider) > 120 || len(p.Economy.Formatted) > 256 || len(p.Economy.Currency) > 120) {
+			bad(w, errors.New("invalid economy observation"))
+			return
+		}
 		if len(p.UUID) > 64 || len(p.Name) > 64 || len(p.Values) > 40 || len(p.ClientVersion) > 120 || len(p.Regions) > 32 {
 			bad(w, errors.New("invalid player snapshot"))
 			return

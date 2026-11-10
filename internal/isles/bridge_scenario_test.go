@@ -68,6 +68,7 @@ func TestVerifiedIdentityAndMemberTaskScenario(t *testing.T) {
 	snapshot := map[string]any{"platform": "Paper", "minecraft": "1.21.1", "plugins": map[string]string{"LuckPerms": "5.4", "spark": "1.10"}, "groups": []string{"member"}, "tps": 19.9, "players": []any{map[string]any{"uuid": identity["uuid"], "name": "Alice", "group": "member", "values": map[string]string{"balance": "12.00"}}}}
 	snapshot["protocolVersions"] = []string{"1.21.1"}
 	snapshot["players"] = []any{map[string]any{"uuid": identity["uuid"], "name": "Alice", "group": "member", "values": map[string]string{"balance": "12.00"}, "clientVersion": "1.21.1", "regions": []any{map[string]any{"id": "home", "world": "world", "role": "member", "centerX": 5, "centerY": 70, "centerZ": 5}}}}
+	snapshot["players"].([]any)[0].(map[string]any)["economy"] = map[string]any{"provider": "EssentialsX Economy", "balance": 123.44999999999999, "formatted": "$123.44", "currency": "$"}
 	status, b = call("POST", "/api/isles/bridge/survival/heartbeat", bridgeToken, "", snapshot)
 	mustStatus(t, 204, status, b)
 	status, b = call("GET", "/api/isles/players/site-player/links", token, "site-player", nil)
@@ -85,6 +86,9 @@ func TestVerifiedIdentityAndMemberTaskScenario(t *testing.T) {
 	}
 	if !bytes.Contains(b, []byte(`"clientVersion":"1.21.1"`)) || !bytes.Contains(b, []byte(`"id":"home"`)) {
 		t.Fatalf("provider data missing: %s", b)
+	}
+	if !bytes.Contains(b, []byte(`"formatted":"$123.44"`)) {
+		t.Fatalf("provider currency format was rewritten: %s", b)
 	}
 	status, b = request(t, client, api.URL, "POST", "/api/isles/admin/servers/survival/tasks", map[string]any{"player": "site-player", "kind": "member", "group": "member", "grant": true}, true)
 	mustStatus(t, 200, status, b)

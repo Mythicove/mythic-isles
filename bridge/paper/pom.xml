@@ -8,6 +8,7 @@
     <repository><id>lucko</id><url>https://repo.lucko.me/</url></repository>
     <repository><id>viaversion</id><url>https://repo.viaversion.com/</url></repository>
     <repository><id>enginehub</id><url>https://maven.enginehub.org/repo/</url></repository>
+    <repository><id>jitpack</id><url>https://jitpack.io</url></repository>
   </repositories>
   <dependencies>
     <dependency><groupId>org.spigotmc</groupId><artifactId>spigot-api</artifactId><version>1.21.1-R0.1-SNAPSHOT</version><scope>provided</scope></dependency>
@@ -17,6 +18,7 @@
     <dependency><groupId>me.lucko</groupId><artifactId>spark-api</artifactId><version>0.1-SNAPSHOT</version><scope>provided</scope></dependency>
     <dependency><groupId>com.viaversion</groupId><artifactId>viaversion-api</artifactId><version>5.2.1</version><scope>provided</scope></dependency>
     <dependency><groupId>com.sk89q.worldguard</groupId><artifactId>worldguard-bukkit</artifactId><version>7.0.12</version><scope>provided</scope></dependency>
+    <dependency><groupId>com.github.MilkBowl</groupId><artifactId>VaultAPI</artifactId><version>1.7</version><scope>provided</scope><exclusions><exclusion><groupId>org.bukkit</groupId><artifactId>bukkit</artifactId></exclusion></exclusions></dependency>
   </dependencies>
   <build>
     <plugins>

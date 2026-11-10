@@ -51,7 +51,8 @@ try {
   await copyFile(resolve(paper), join(work, "server.jar"));
   await copyFile(join(root, "bridge", "paper", "target", "isles-paper-bridge-0.1.0.jar"), join(work, "plugins", "MythicIsles.jar"));
   if (process.env.ISLES_TEST_PLUGIN_DIR) {
-    for (const name of await readdir(process.env.ISLES_TEST_PLUGIN_DIR)) if (name.endsWith(".jar")) await copyFile(join(process.env.ISLES_TEST_PLUGIN_DIR, name), join(work, "plugins", name));
+    const selected = process.env.ISLES_TEST_PLUGIN_FILTER?.split(",");
+    for (const name of await readdir(process.env.ISLES_TEST_PLUGIN_DIR)) if (name.endsWith(".jar") && (!selected || selected.includes(name))) await copyFile(join(process.env.ISLES_TEST_PLUGIN_DIR, name), join(work, "plugins", name));
   }
   await writeFile(join(work, "eula.txt"), "eula=true\n");
   await writeFile(join(work, "server.properties"), `server-ip=127.0.0.1\nserver-port=${gamePort}\nonline-mode=false\nenforce-secure-profile=false\nspawn-protection=0\nview-distance=2\nsimulation-distance=2\ngenerate-structures=false\nmax-players=5\n`);
@@ -120,7 +121,15 @@ try {
     game.stdin.write("deop IslesTester\n");
     regions = "membership-and-location-observed";
   }
-  const manifest = { server: heartbeat.snapshot.platform, minecraft: heartbeat.snapshot.minecraft, heartbeat: true, inGameLink: true, gameName: linked[0].identity.name, whitelist: "applied", member, placeholder, protocols, regions, providers: Object.keys((await api("admin/servers/live/bridge")).snapshot.plugins).sort() };
+  let economy = "not-installed";
+  if (currentProviders.Vault) {
+    game.stdin.write("eco set IslesTester 123.45\n");
+    let observation;
+    try { await waitFor(async () => { observation = (await api("players/website-player/links", "GET", undefined, admin, "website-player"))[0]; const value=observation?.player?.economy; return value && Math.abs(value.balance - 123.45) < 0.000001 && typeof value.formatted === "string" && value.formatted.length > 0 && value.provider; }); }
+    finally { await writeFile(join(dir,"economy-observation.json"),JSON.stringify(observation ?? null,null,2)); }
+    economy = "balance-and-publisher-format-observed";
+  }
+  const manifest = { server: heartbeat.snapshot.platform, minecraft: heartbeat.snapshot.minecraft, heartbeat: true, inGameLink: true, gameName: linked[0].identity.name, whitelist: "applied", member, placeholder, protocols, regions, economy, providers: Object.keys((await api("admin/servers/live/bridge")).snapshot.plugins).sort() };
   await writeFile(join(dir, "scenario-result.json"), JSON.stringify(manifest, null, 2));
   console.log(JSON.stringify(manifest));
 } finally {
