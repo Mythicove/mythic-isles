@@ -19,22 +19,34 @@ type GameLink struct {
 	LinkedAt time.Time `json:"linkedAt"`
 }
 type PlayerSnapshot struct {
-	UUID   string            `json:"uuid"`
-	Name   string            `json:"name"`
-	Group  string            `json:"group,omitempty"`
-	Groups []string          `json:"groups,omitempty"`
-	Values map[string]string `json:"values,omitempty"`
+	UUID             string            `json:"uuid"`
+	Name             string            `json:"name"`
+	Group            string            `json:"group,omitempty"`
+	Groups           []string          `json:"groups,omitempty"`
+	Values           map[string]string `json:"values,omitempty"`
+	ClientVersion    string            `json:"clientVersion,omitempty"`
+	Regions          []GameRegion      `json:"regions,omitempty"`
+	RegionsTruncated bool              `json:"regionsTruncated,omitempty"`
+}
+type GameRegion struct {
+	ID      string `json:"id"`
+	World   string `json:"world"`
+	Role    string `json:"role"`
+	CenterX int    `json:"centerX"`
+	CenterY int    `json:"centerY"`
+	CenterZ int    `json:"centerZ"`
 }
 type BridgeSnapshot struct {
-	Platform   string            `json:"platform"`
-	Minecraft  string            `json:"minecraft"`
-	Plugins    map[string]string `json:"plugins"`
-	Groups     []string          `json:"groups"`
-	TPS        *float64          `json:"tps,omitempty"`
-	MSPT       *float64          `json:"mspt,omitempty"`
-	CPU        *float64          `json:"cpu,omitempty"`
-	Players    []PlayerSnapshot  `json:"players"`
-	ReceivedAt time.Time         `json:"receivedAt"`
+	Platform         string            `json:"platform"`
+	Minecraft        string            `json:"minecraft"`
+	Plugins          map[string]string `json:"plugins"`
+	Groups           []string          `json:"groups"`
+	TPS              *float64          `json:"tps,omitempty"`
+	MSPT             *float64          `json:"mspt,omitempty"`
+	CPU              *float64          `json:"cpu,omitempty"`
+	Players          []PlayerSnapshot  `json:"players"`
+	ReceivedAt       time.Time         `json:"receivedAt"`
+	ProtocolVersions []string          `json:"protocolVersions,omitempty"`
 }
 type pairing struct {
 	Player  string
@@ -122,14 +134,20 @@ func (a *App) heartbeat(w http.ResponseWriter, r *http.Request) {
 		bad(w, err)
 		return
 	}
-	if len(snapshot.Players) > 2000 || len(snapshot.Plugins) > 200 || len(snapshot.Groups) > 500 || len(snapshot.Platform) > 120 || len(snapshot.Minecraft) > 120 {
+	if len(snapshot.Players) > 2000 || len(snapshot.Plugins) > 200 || len(snapshot.Groups) > 500 || len(snapshot.ProtocolVersions) > 256 || len(snapshot.Platform) > 120 || len(snapshot.Minecraft) > 120 {
 		bad(w, errors.New("snapshot too large"))
 		return
 	}
 	for _, p := range snapshot.Players {
-		if len(p.UUID) > 64 || len(p.Name) > 64 || len(p.Values) > 40 {
+		if len(p.UUID) > 64 || len(p.Name) > 64 || len(p.Values) > 40 || len(p.ClientVersion) > 120 || len(p.Regions) > 32 {
 			bad(w, errors.New("invalid player snapshot"))
 			return
+		}
+		for _, region := range p.Regions {
+			if len(region.ID) > 256 || len(region.World) > 256 || (region.Role != "owner" && region.Role != "member") {
+				bad(w, errors.New("invalid region observation"))
+				return
+			}
 		}
 		for k, v := range p.Values {
 			if len(k) > 100 || len(v) > 2000 {

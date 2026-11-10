@@ -3,7 +3,7 @@ version: 0.1.0
 main: org.mythicove.isles.IslesBridge
 api-version: '1.21'
 description: Verified game identity, member actions and optional Minecraft data for Mythicove.
-softdepend: [LuckPerms, PlaceholderAPI, spark]
+softdepend: [LuckPerms, PlaceholderAPI, spark, ViaVersion, WorldGuard]
 commands:
   mythic:
     description: Link this game identity to a Mythicove website player

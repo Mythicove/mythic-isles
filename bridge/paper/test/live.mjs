@@ -94,7 +94,33 @@ try {
     await waitFor(async () => (await api("players/website-player/links", "GET", undefined, admin, "website-player"))[0]?.player?.values?.server_name);
     placeholder = "resolved";
   }
-  const manifest = { server: heartbeat.snapshot.platform, minecraft: heartbeat.snapshot.minecraft, heartbeat: true, inGameLink: true, gameName: linked[0].identity.name, whitelist: "applied", member, placeholder, providers: Object.keys((await api("admin/servers/live/bridge")).snapshot.plugins).sort() };
+  let protocols = "not-installed";
+  if (currentProviders.ViaVersion) {
+    await waitFor(async () => (await api("admin/servers/live/bridge")).snapshot.protocolVersions?.some((v) => v.includes("1.21")));
+    await waitFor(async () => (await api("players/website-player/links", "GET", undefined, admin, "website-player"))[0]?.player?.clientVersion?.includes("1.21"));
+    protocols = "server-and-player-observed";
+  }
+  let regions = "not-installed";
+  if (currentProviders.WorldGuard) {
+    game.stdin.write(`rg define -w world -g isles_test\n`);
+    await pause(1000);
+    game.stdin.write(`rg addmember -w world isles_test ${linked[0].identity.uuid}\n`);
+    // A global/template region has no physical location and must not appear.
+    await pause(1000);
+    game.stdin.write(`op IslesTester\n`);
+    await pause(1000);
+    bot.chat("//pos1 0,60,0");
+    await pause(1000);
+    bot.chat("//pos2 10,80,10");
+    await pause(1000);
+    bot.chat("/rg define isles_plot");
+    await pause(1000);
+    game.stdin.write(`rg addmember -w world isles_plot ${linked[0].identity.uuid}\n`);
+    await waitFor(async () => { const profile = (await api("players/website-player/links", "GET", undefined, admin, "website-player"))[0]?.player; return profile?.regions?.some((r) => r.id === "isles_plot" && r.world === "world" && r.centerX === 5 && r.role === "member") && !profile.regions.some((r) => r.id === "isles_test"); });
+    game.stdin.write("deop IslesTester\n");
+    regions = "membership-and-location-observed";
+  }
+  const manifest = { server: heartbeat.snapshot.platform, minecraft: heartbeat.snapshot.minecraft, heartbeat: true, inGameLink: true, gameName: linked[0].identity.name, whitelist: "applied", member, placeholder, protocols, regions, providers: Object.keys((await api("admin/servers/live/bridge")).snapshot.plugins).sort() };
   await writeFile(join(dir, "scenario-result.json"), JSON.stringify(manifest, null, 2));
   console.log(JSON.stringify(manifest));
 } finally {
