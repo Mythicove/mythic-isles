@@ -55,6 +55,7 @@ type BridgeSnapshot struct {
 	ReceivedAt       time.Time         `json:"receivedAt"`
 	ProtocolVersions []string          `json:"protocolVersions,omitempty"`
 	Chunky           []ChunkyWorld     `json:"chunky,omitempty"`
+	Plan             *PlanSnapshot     `json:"plan,omitempty"`
 }
 type pairing struct {
 	Player  string
@@ -96,6 +97,7 @@ func (a *App) bridgeRoutes(m *http.ServeMux) {
 		sub.HandleFunc("POST /api/isles/bridge/{id}/heartbeat", a.heartbeat)
 		sub.HandleFunc("POST /api/isles/bridge/{id}/link", a.linkGame)
 		sub.HandleFunc("GET /api/isles/bridge/{id}/tasks", a.bridgeTasks)
+		sub.HandleFunc("GET /api/isles/bridge/{id}/identities", a.bridgeIdentities)
 		sub.HandleFunc("POST /api/isles/bridge/{id}/tasks/{task}", a.finishTask)
 		sub.HandleFunc("POST /api/isles/bridge/{id}/tasks/{task}/claim", a.claimTask)
 		sub.ServeHTTP(w, r)
@@ -149,6 +151,10 @@ func (a *App) heartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := validateChunkySnapshot(snapshot.Chunky); err != nil {
+		bad(w, err)
+		return
+	}
+	if err := validatePlanSnapshot(snapshot.Plan); err != nil {
 		bad(w, err)
 		return
 	}
@@ -284,6 +290,14 @@ func (a *App) playerLinks(w http.ResponseWriter, r *http.Request) {
 		item := map[string]any{"server": server, "identity": link, "fresh": false}
 		if snapshot, ok := a.bridges[server]; ok {
 			item["fresh"] = time.Since(snapshot.ReceivedAt) < 90*time.Second
+			if snapshot.Plan != nil {
+				for _, activity := range snapshot.Plan.Players {
+					if activity.UUID == link.UUID {
+						item["activity"] = activity
+						break
+					}
+				}
+			}
 			for _, p := range snapshot.Players {
 				if p.UUID == link.UUID {
 					item["player"] = p

@@ -65,10 +65,19 @@ func TestVerifiedIdentityAndMemberTaskScenario(t *testing.T) {
 	mustStatus(t, 204, status, b)
 	status, b = call("POST", "/api/isles/bridge/survival/link", bridgeToken, "", identity)
 	mustStatus(t, 403, status, b)
+	status, b = call("GET", "/api/isles/bridge/survival/identities", bridgeToken, "", nil)
+	mustStatus(t, 200, status, b)
+	if !bytes.Contains(b, []byte(identity["uuid"])) || bytes.Contains(b, []byte("site-player")) {
+		t.Fatalf("invalid UUID allowlist: %s", b)
+	}
+	status, b = call("GET", "/api/isles/bridge/other/identities", bridgeToken, "", nil)
+	mustStatus(t, 401, status, b)
 	snapshot := map[string]any{"platform": "Paper", "minecraft": "1.21.1", "plugins": map[string]string{"LuckPerms": "5.4", "spark": "1.10"}, "groups": []string{"member"}, "tps": 19.9, "players": []any{map[string]any{"uuid": identity["uuid"], "name": "Alice", "group": "member", "values": map[string]string{"balance": "12.00"}}}}
 	snapshot["protocolVersions"] = []string{"1.21.1"}
 	snapshot["players"] = []any{map[string]any{"uuid": identity["uuid"], "name": "Alice", "group": "member", "values": map[string]string{"balance": "12.00"}, "clientVersion": "1.21.1", "regions": []any{map[string]any{"id": "home", "world": "world", "role": "member", "centerX": 5, "centerY": 70, "centerZ": 5}}}}
 	snapshot["players"].([]any)[0].(map[string]any)["economy"] = map[string]any{"provider": "EssentialsX Economy", "balance": 123.44999999999999, "formatted": "$123.44", "currency": "$"}
+	activity := map[string]any{"uuid": identity["uuid"], "sessions": 2, "playtimeMs": 90000, "afkMs": 1000, "firstSeen": "2026-11-10T10:00:00Z", "lastSeen": "2026-11-10T10:01:30Z", "observedAt": "2026-11-10T10:02:00Z"}
+	snapshot["plan"] = map[string]any{"serverUUID": "12345678-1234-1234-1234-123456789012", "recordedPlayers": 1, "sessions": 2, "playtimeMs": 90000, "afkMs": 1000, "observedAt": "2026-11-10T10:02:00Z", "players": []any{activity}}
 	status, b = call("POST", "/api/isles/bridge/survival/heartbeat", bridgeToken, "", snapshot)
 	mustStatus(t, 204, status, b)
 	status, b = call("GET", "/api/isles/players/site-player/links", token, "site-player", nil)
@@ -90,6 +99,27 @@ func TestVerifiedIdentityAndMemberTaskScenario(t *testing.T) {
 	if !bytes.Contains(b, []byte(`"formatted":"$123.44"`)) {
 		t.Fatalf("provider currency format was rewritten: %s", b)
 	}
+	if !bytes.Contains(b, []byte(`"activity"`)) || !bytes.Contains(b, []byte(`"playtimeMs":90000`)) || bytes.Contains(b, []byte("recordedPlayers")) {
+		t.Fatalf("private Plan projection: %s", b)
+	}
+	// Persisted activity is independent of the online Bukkit player list.
+	snapshot["players"] = []any{}
+	status, b = call("POST", "/api/isles/bridge/survival/heartbeat", bridgeToken, "", snapshot)
+	mustStatus(t, 204, status, b)
+	status, b = call("GET", "/api/isles/players/site-player/links", token, "site-player", nil)
+	mustStatus(t, 200, status, b)
+	if !bytes.Contains(b, []byte(`"activity"`)) || bytes.Contains(b, []byte(`"player":`)) {
+		t.Fatalf("offline activity missing: %s", b)
+	}
+	status, b = call("GET", "/api/isles/players/unlinked/links", token, "unlinked", nil)
+	mustStatus(t, 200, status, b)
+	if bytes.Contains(b, []byte("playtimeMs")) {
+		t.Fatal("Plan activity disclosed to unlinked owner")
+	}
+	activity["playtimeMs"] = -1
+	status, b = call("POST", "/api/isles/bridge/survival/heartbeat", bridgeToken, "", snapshot)
+	mustStatus(t, 400, status, b)
+	activity["playtimeMs"] = 90000
 	status, b = request(t, client, api.URL, "POST", "/api/isles/admin/servers/survival/tasks", map[string]any{"player": "site-player", "kind": "member", "group": "member", "grant": true}, true)
 	mustStatus(t, 200, status, b)
 	var task struct {
@@ -126,7 +156,7 @@ func TestVerifiedIdentityAndMemberTaskScenario(t *testing.T) {
 	}
 	status, b = request(t, client, api.URL, "GET", "/api/isles/servers", nil, false)
 	mustStatus(t, 200, status, b)
-	for _, secret := range []string{bridgeToken, identity["uuid"], "balance"} {
+	for _, secret := range []string{bridgeToken, identity["uuid"], "balance", "plan", "playtimeMs"} {
 		if bytes.Contains(b, []byte(secret)) {
 			t.Fatal("bridge/private profile leaked publicly")
 		}

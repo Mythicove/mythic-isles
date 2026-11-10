@@ -12,6 +12,7 @@
     <repository><id>codemc</id><url>https://repo.codemc.io/repository/maven-public/</url></repository>
   </repositories>
   <dependencies>
+    <dependency><groupId>com.github.plan-player-analytics</groupId><artifactId>Plan</artifactId><version>5.9.3705</version><scope>provided</scope></dependency>
     <dependency><groupId>org.popcraft</groupId><artifactId>chunky-common</artifactId><version>1.4.40</version><scope>provided</scope></dependency>
     <dependency><groupId>org.spigotmc</groupId><artifactId>spigot-api</artifactId><version>1.21.1-R0.1-SNAPSHOT</version><scope>provided</scope></dependency>
     <dependency><groupId>com.google.code.gson</groupId><artifactId>gson</artifactId><version>2.11.0</version></dependency>

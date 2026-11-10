@@ -15,6 +15,7 @@ Optional self-hosted Minecraft server directory and integration service for Myth
 - Connection secrets encrypted with AES-256-GCM using a deployment key kept outside the data directory. Tokens are never returned by configuration APIs.
 - Paper-compatible Java 21 Bridge: one-time verified game identity linking, owner-only profile data, durable whitelist and global LuckPerms membership tasks, optional PlaceholderAPI and spark observations. See `bridge/paper/README.md` for tested versions and live scenario.
 - Chunky world pregeneration: reported worlds, square/circle selections, progress and provider ETA, pause/resume/cancel (including paused tasks). Non-idempotent operations are durably claimed once; uncertain dispatches are not automatically replayed.
+- Plan 5 Query API: current-server stored session totals and verified players' private activity, including while offline. Database reads run off the game thread; no Plan database credentials or arbitrary query endpoint are exposed.
 
 These adapters have HTTP/TCP/UDP protocol scenario coverage. Installed panel/plugin versions still need deployment-specific verification. Pterodactyl's WebSocket console and MCSManager SSO/live streams are not implemented here yet.
 

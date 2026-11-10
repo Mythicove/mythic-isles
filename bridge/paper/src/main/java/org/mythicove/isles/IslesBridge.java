@@ -42,6 +42,7 @@ public final class IslesBridge extends JavaPlugin {
     private WorldGuardHook worldGuard;
     private VaultHook vault;
     private ChunkyHook chunky;
+    private PlanHook plan;
 
     @Override public void onEnable() {
         saveDefaultConfig();
@@ -63,6 +64,7 @@ public final class IslesBridge extends JavaPlugin {
         if (enabled("WorldGuard")) worldGuard = new WorldGuardHook();
         if (enabled("Vault")) vault = new VaultHook();
         if (enabled("Chunky")) chunky = new ChunkyHook();
+        if (enabled("Plan")) plan = new PlanHook();
         Bukkit.getScheduler().runTaskTimer(this, this::observe, 20L, 400L);
         getLogger().info("Bridge enabled. Optional data providers are detected from installed plugins.");
     }
@@ -86,7 +88,7 @@ public final class IslesBridge extends JavaPlugin {
             snapshot.put("platform", Bukkit.getName());
             snapshot.put("minecraft", Bukkit.getBukkitVersion());
             Map<String, String> plugins = new LinkedHashMap<>();
-            for (String name : List.of("LuckPerms", "PlaceholderAPI", "spark", "ViaVersion", "WorldGuard", "Vault", "Chunky")) {
+            for (String name : List.of("LuckPerms", "PlaceholderAPI", "spark", "ViaVersion", "WorldGuard", "Vault", "Chunky", "Plan")) {
                 var plugin = Bukkit.getPluginManager().getPlugin(name);
                 if (plugin != null && plugin.isEnabled()) plugins.put(name, plugin.getDescription().getVersion());
             }
@@ -117,10 +119,19 @@ public final class IslesBridge extends JavaPlugin {
                 return value;
             }).toList();
             snapshot.put("players", players);
-            String body = json.toJson(snapshot);
             network.submit(() -> {
                 try {
-                    send("heartbeat", "POST", body);
+                    if (plan != null) {
+                        try {
+                            var identities = JsonParser.parseString(send("identities", "GET", null)).getAsJsonArray();
+                            List<String> uuids = new java.util.ArrayList<>();
+                            for (var identity : identities) uuids.add(identity.getAsString());
+                            snapshot.put("plan", plan.collect(uuids));
+                        } catch (Exception unavailable) {
+                            getLogger().warning("Plan statistics unavailable; check its database and Query API.");
+                        }
+                    }
+                    send("heartbeat", "POST", json.toJson(snapshot));
                     JsonArray tasks = JsonParser.parseString(send("tasks", "GET", null)).getAsJsonArray();
                     for (var element : tasks) executeTask(element.getAsJsonObject());
                 } catch (Exception e) {

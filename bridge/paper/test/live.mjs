@@ -42,6 +42,12 @@ async function waitFor(check, ms = 120_000) {
   while (Date.now() < end) { try { const value = await check(); if (value) return value; } catch (e) { error = e; } await pause(1000); }
   throw error ?? new Error("Scenario condition timed out");
 }
+async function connectPlayer(username) {
+  const client = mineflayer.createBot({ host: "127.0.0.1", port: gamePort, username, auth: "offline", version: "1.21.1", hideErrors: true });
+  client.on("error", (error) => console.log(`Client: ${error.message}`));
+  await new Promise((resolve, reject) => { const timer = setTimeout(() => reject(new Error("Game login timed out")), 30_000); client.once("spawn", () => { clearTimeout(timer); resolve(); }); client.once("kicked", (reason) => { clearTimeout(timer); reject(new Error(`Kicked: ${JSON.stringify(reason)}`)); }); });
+  return client;
+}
 try {
   await waitFor(async () => (await fetch(`${origin}/healthz`)).ok, 30_000);
   await api("admin/servers/live", "PUT", { name: "Live test", edition: "java", address: `127.0.0.1:${gamePort}`, published: true, links: [] });
@@ -57,14 +63,16 @@ try {
   await writeFile(join(work, "eula.txt"), "eula=true\n");
   await writeFile(join(work, "server.properties"), `server-ip=127.0.0.1\nserver-port=${gamePort}\nonline-mode=false\nenforce-secure-profile=false\nspawn-protection=0\nview-distance=2\nsimulation-distance=2\ngenerate-structures=false\nmax-players=5\n`);
   await writeFile(join(work, "plugins", "MythicIsles", "config.yml"), `url: '${origin}'\nserver: live\ntoken: '${secret.token}'\nplaceholders:\n  server_name: '%server_name%'\n`);
+  if ((await readdir(join(work, "plugins"))).includes("Plan.jar")) {
+    await mkdir(join(work, "plugins", "Plan"), { recursive: true });
+    await writeFile(join(work, "plugins", "Plan", "config.yml"), `Webserver:\n  Internal_IP: 127.0.0.1\n  Port: ${await freePort()}\nData_gathering:\n  Geolocations: false\nPlugin:\n  Update_notifications:\n    Check_for_updates: false\n`);
+  }
   game = spawn("java", ["-Xms256M", "-Xmx1536M", "-jar", "server.jar", "--nogui"], { cwd: work });
   capture(game, "paper");
   const heartbeat = await waitFor(async () => { if (game.exitCode !== null) throw new Error("Game server exited before heartbeat"); const result = await api("admin/servers/live/bridge"); return result.fresh && result; }, 240_000);
   assert(heartbeat.snapshot.platform);
   const pair = await api("players/website-player/pair", "POST", { server: "live" }, admin, "website-player");
-  bot = mineflayer.createBot({ host: "127.0.0.1", port: gamePort, username: "IslesTester", auth: "offline", version: "1.21.1", hideErrors: true });
-  bot.on("error", (error) => console.log(`Client: ${error.message}`));
-  await new Promise((resolve, reject) => { const timer = setTimeout(() => reject(new Error("Game login timed out")), 30_000); bot.once("spawn", () => { clearTimeout(timer); resolve(); }); bot.once("kicked", (reason) => { clearTimeout(timer); reject(new Error(`Kicked: ${JSON.stringify(reason)}`)); }); });
+  bot = await connectPlayer("IslesTester");
   bot.chat(`/mythic link ${pair.code}`);
   const linked = await waitFor(async () => { const items = await api("players/website-player/links", "GET", undefined, admin, "website-player"); return items.length && items; });
   assert.equal(linked[0].identity.name, "IslesTester");
@@ -129,6 +137,40 @@ try {
     finally { await writeFile(join(dir,"economy-observation.json"),JSON.stringify(observation ?? null,null,2)); }
     economy = "balance-and-publisher-format-observed";
   }
+  const restartGame = async () => {
+    bot?.quit(); bot = undefined;
+    game.stdin.write("stop\n");
+    await waitFor(() => game.exitCode !== null, 60_000);
+    const restartedAt = Date.now();
+    game = spawn("java", ["-Xms256M", "-Xmx1536M", "-jar", "server.jar", "--nogui"], { cwd: work });
+    capture(game, "paper-restarted");
+    await waitFor(async () => Date.parse((await api("admin/servers/live/bridge")).snapshot.receivedAt) > restartedAt, 240_000);
+  };
+  let plan = "not-installed";
+  if (currentProviders.Plan) {
+    await waitFor(async () => (await api("admin/servers/live/bridge")).snapshot.plan);
+    bot.quit(); bot = undefined;
+    const activity = await waitFor(async () => (await api("players/website-player/links", "GET", undefined, admin, "website-player"))[0]?.activity);
+    assert(activity.sessions >= 1 && activity.playtimeMs > 0);
+    const peer = await connectPlayer("UnlinkedGuest");
+    await pause(3000);
+    peer.quit();
+    const aggregate = await waitFor(async () => {
+      const snapshot = (await api("admin/servers/live/bridge")).snapshot.plan;
+      return snapshot?.recordedPlayers >= 2 && snapshot;
+    });
+    assert.equal(aggregate.players.length, 1, "Unlinked player activity was exported");
+    assert.equal(aggregate.players[0].uuid, linked[0].identity.uuid);
+    await restartGame();
+    const afterRestart = await waitFor(async () => {
+      const result = (await api("players/website-player/links", "GET", undefined, admin, "website-player"))[0];
+      return result?.fresh && result.activity && !result.player && result;
+    });
+    assert.equal(afterRestart.activity.playtimeMs, activity.playtimeMs);
+    assert.equal(afterRestart.activity.sessions, activity.sessions);
+    await writeFile(join(dir, "plan-observations.json"), JSON.stringify({ activity, aggregate, afterRestart }, null, 2));
+    plan = "saved-sessions-offline-owner-only-aggregate-and-restart-observed";
+  }
   let chunky = "not-installed";
   if (currentProviders.Chunky) {
     const operation = async (action, extra = {}) => {
@@ -143,15 +185,6 @@ try {
       const world = (await api("admin/servers/live/bridge")).snapshot.chunky?.find((w) => w.world === "world");
       return world?.state === state && world;
     });
-    const restartGame = async () => {
-      bot?.quit(); bot = undefined;
-      game.stdin.write("stop\n");
-      await waitFor(() => game.exitCode !== null, 60_000);
-      const restartedAt = Date.now();
-      game = spawn("java", ["-Xms256M", "-Xmx1536M", "-jar", "server.jar", "--nogui"], { cwd: work });
-      capture(game, "paper-restarted");
-      await waitFor(async () => Date.parse((await api("admin/servers/live/bridge")).snapshot.receivedAt) > restartedAt, 240_000);
-    };
     await worldState("idle");
     await operation("start", { shape: "square", centerX: 10000, centerZ: 10000, radius: 1024 });
     const running = await worldState("running");
@@ -184,7 +217,7 @@ try {
     await writeFile(join(dir, "chunky-observations.json"), JSON.stringify({ running, paused, resumed, cancelled, completed, terminalAfterRestart }, null, 2));
     chunky = "generated-paused-restarted-resumed-cancelled-running-and-paused-completed";
   }
-  const manifest = { server: heartbeat.snapshot.platform, minecraft: heartbeat.snapshot.minecraft, heartbeat: true, inGameLink: true, gameName: linked[0].identity.name, whitelist: "applied", member, placeholder, protocols, regions, economy, chunky, providers: Object.keys((await api("admin/servers/live/bridge")).snapshot.plugins).sort() };
+  const manifest = { server: heartbeat.snapshot.platform, minecraft: heartbeat.snapshot.minecraft, heartbeat: true, inGameLink: true, gameName: linked[0].identity.name, whitelist: "applied", member, placeholder, protocols, regions, economy, chunky, plan, providers: Object.keys((await api("admin/servers/live/bridge")).snapshot.plugins).sort() };
   await writeFile(join(dir, "scenario-result.json"), JSON.stringify(manifest, null, 2));
   console.log(JSON.stringify(manifest));
 } finally {
