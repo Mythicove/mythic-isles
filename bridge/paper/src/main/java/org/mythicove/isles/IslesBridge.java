@@ -41,6 +41,7 @@ public final class IslesBridge extends JavaPlugin {
     private ViaVersionHook viaVersion;
     private WorldGuardHook worldGuard;
     private VaultHook vault;
+    private ChunkyHook chunky;
 
     @Override public void onEnable() {
         saveDefaultConfig();
@@ -61,6 +62,7 @@ public final class IslesBridge extends JavaPlugin {
         if (enabled("ViaVersion")) viaVersion = new ViaVersionHook();
         if (enabled("WorldGuard")) worldGuard = new WorldGuardHook();
         if (enabled("Vault")) vault = new VaultHook();
+        if (enabled("Chunky")) chunky = new ChunkyHook();
         Bukkit.getScheduler().runTaskTimer(this, this::observe, 20L, 400L);
         getLogger().info("Bridge enabled. Optional data providers are detected from installed plugins.");
     }
@@ -68,6 +70,7 @@ public final class IslesBridge extends JavaPlugin {
     private boolean enabled(String name) { return Bukkit.getPluginManager().isPluginEnabled(name); }
 
     @Override public void onDisable() {
+        if (chunky != null) chunky.close();
         Bukkit.getScheduler().cancelTasks(this);
         network.shutdownNow();
         http.shutdownNow();
@@ -83,7 +86,7 @@ public final class IslesBridge extends JavaPlugin {
             snapshot.put("platform", Bukkit.getName());
             snapshot.put("minecraft", Bukkit.getBukkitVersion());
             Map<String, String> plugins = new LinkedHashMap<>();
-            for (String name : List.of("LuckPerms", "PlaceholderAPI", "spark", "ViaVersion", "WorldGuard", "Vault")) {
+            for (String name : List.of("LuckPerms", "PlaceholderAPI", "spark", "ViaVersion", "WorldGuard", "Vault", "Chunky")) {
                 var plugin = Bukkit.getPluginManager().getPlugin(name);
                 if (plugin != null && plugin.isEnabled()) plugins.put(name, plugin.getDescription().getVersion());
             }
@@ -92,6 +95,7 @@ public final class IslesBridge extends JavaPlugin {
             snapshot.put("groups", luckPerms == null ? List.of() : luckPerms.groups());
             if (spark != null) snapshot.putAll(spark.statistics());
             if (viaVersion != null) snapshot.put("protocolVersions", viaVersion.supportedVersions());
+            if (chunky != null) snapshot.put("chunky", chunky.worlds());
             var templates = getConfig().getConfigurationSection("placeholders");
             List<Map<String, Object>> players = Bukkit.getOnlinePlayers().stream().limit(2000).map(p -> {
                 Map<String, Object> value = new LinkedHashMap<>();
@@ -162,6 +166,27 @@ public final class IslesBridge extends JavaPlugin {
 
     private void executeTask(JsonObject task) throws Exception {
         String id = task.get("id").getAsString();
+        if (task.get("kind").getAsString().equals("chunky")) {
+            // Claim is durably persisted by Isles before any provider call. A
+            // lost claim/result response leaves dispatched, never auto-replayed.
+            send("tasks/" + id + "/claim", "POST", "{}");
+            boolean accepted = false;
+            String error = "Chunky rejected operation; refresh world state";
+            var execution = Bukkit.getScheduler().callSyncMethod(this, () -> {
+                if (chunky == null) throw new IllegalStateException("Chunky unavailable");
+                return chunky.execute(task.getAsJsonObject("chunky"));
+            });
+            try {
+                accepted = execution.get(10, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (java.util.concurrent.ExecutionException e) {
+                error = "Chunky rejected operation: " + e.getCause().getClass().getSimpleName();
+            } catch (java.util.concurrent.TimeoutException e) {
+                execution.cancel(false);
+                throw e; // Execution may have started: leave outcome uncertain.
+            }
+            send("tasks/" + id, "POST", json.toJson(Map.of("success", accepted, "error", accepted ? "" : error)));
+            return;
+        }
         boolean success = false;
         String error = "";
         if (!success) {

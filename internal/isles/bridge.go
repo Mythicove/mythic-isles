@@ -54,6 +54,7 @@ type BridgeSnapshot struct {
 	Players          []PlayerSnapshot  `json:"players"`
 	ReceivedAt       time.Time         `json:"receivedAt"`
 	ProtocolVersions []string          `json:"protocolVersions,omitempty"`
+	Chunky           []ChunkyWorld     `json:"chunky,omitempty"`
 }
 type pairing struct {
 	Player  string
@@ -61,14 +62,15 @@ type pairing struct {
 	Expires time.Time
 }
 type BridgeTask struct {
-	ID        string    `json:"id"`
-	Kind      string    `json:"kind"`
-	UUID      string    `json:"uuid"`
-	Group     string    `json:"group,omitempty"`
-	Grant     bool      `json:"grant"`
-	Status    string    `json:"status"`
-	Error     string    `json:"error,omitempty"`
-	CreatedAt time.Time `json:"createdAt"`
+	ID        string           `json:"id"`
+	Kind      string           `json:"kind"`
+	UUID      string           `json:"uuid"`
+	Group     string           `json:"group,omitempty"`
+	Grant     bool             `json:"grant"`
+	Status    string           `json:"status"`
+	Error     string           `json:"error,omitempty"`
+	CreatedAt time.Time        `json:"createdAt"`
+	Chunky    *ChunkyOperation `json:"chunky,omitempty"`
 }
 
 func randomID() string { b := make([]byte, 16); _, _ = rand.Read(b); return hex.EncodeToString(b) }
@@ -95,6 +97,7 @@ func (a *App) bridgeRoutes(m *http.ServeMux) {
 		sub.HandleFunc("POST /api/isles/bridge/{id}/link", a.linkGame)
 		sub.HandleFunc("GET /api/isles/bridge/{id}/tasks", a.bridgeTasks)
 		sub.HandleFunc("POST /api/isles/bridge/{id}/tasks/{task}", a.finishTask)
+		sub.HandleFunc("POST /api/isles/bridge/{id}/tasks/{task}/claim", a.claimTask)
 		sub.ServeHTTP(w, r)
 	})
 	m.HandleFunc("/api/isles/players/{player}/", func(w http.ResponseWriter, r *http.Request) {
@@ -143,6 +146,10 @@ func (a *App) heartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(snapshot.Players) > 2000 || len(snapshot.Plugins) > 200 || len(snapshot.Groups) > 500 || len(snapshot.ProtocolVersions) > 256 || len(snapshot.Platform) > 120 || len(snapshot.Minecraft) > 120 {
 		bad(w, errors.New("snapshot too large"))
+		return
+	}
+	if err := validateChunkySnapshot(snapshot.Chunky); err != nil {
+		bad(w, err)
 		return
 	}
 	for _, p := range snapshot.Players {
@@ -333,6 +340,12 @@ func (a *App) enqueueTask(w http.ResponseWriter, r *http.Request) {
 		bad(w, errors.New("select a group reported by the connected server"))
 		return
 	}
+	a.queueTaskLocked(w, r, BridgeTask{Kind: input.Kind, UUID: link.UUID, Group: input.Group, Grant: input.Grant})
+}
+
+// Caller holds a.mu so provider preconditions and queue insertion are atomic.
+func (a *App) queueTaskLocked(w http.ResponseWriter, r *http.Request, task BridgeTask) {
+	id := r.PathValue("id")
 	next := a.config
 	next.Tasks = maps.Clone(next.Tasks)
 	if next.Tasks == nil {
@@ -340,19 +353,19 @@ func (a *App) enqueueTask(w http.ResponseWriter, r *http.Request) {
 	}
 	tasks := slices.Clone(next.Tasks[id])
 	if len(tasks) >= 100 {
-		tasks = slices.DeleteFunc(tasks, func(t BridgeTask) bool { return t.Status != "pending" })
+		tasks = slices.DeleteFunc(tasks, func(t BridgeTask) bool { return t.Status == "applied" || t.Status == "failed" })
 	}
 	if len(tasks) >= 100 {
 		http.Error(w, "pending task capacity reached", 429)
 		return
 	}
-	task := BridgeTask{ID: randomID(), Kind: input.Kind, UUID: link.UUID, Group: input.Group, Grant: input.Grant, Status: "pending", CreatedAt: time.Now().UTC()}
+	task.ID, task.Status, task.CreatedAt = randomID(), "pending", time.Now().UTC()
 	next.Tasks[id] = append(tasks, task)
 	if err := a.saveLocked(next); err != nil {
 		failed(w)
 		return
 	}
-	a.audit(r, "bridge.task."+input.Kind, id)
+	a.audit(r, "bridge.task."+task.Kind, id)
 	reply(w, task)
 }
 
@@ -415,7 +428,11 @@ func (a *App) finishTask(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if tasks[i].Status != "pending" {
+	if tasks[i].Kind == "chunky" && tasks[i].Status == "pending" {
+		http.Error(w, "claim operation before execution", 409)
+		return
+	}
+	if tasks[i].Status != "pending" && tasks[i].Status != "dispatched" {
 		w.WriteHeader(204)
 		return
 	}

@@ -89,6 +89,7 @@ func (a *App) adminMux() *http.ServeMux {
 	m.HandleFunc("GET /api/isles/admin/servers/{id}/bridge", a.bridgeState)
 	m.HandleFunc("GET /api/isles/admin/servers/{id}/tasks", a.listTasks)
 	m.HandleFunc("POST /api/isles/admin/servers/{id}/tasks", a.enqueueTask)
+	m.HandleFunc("POST /api/isles/admin/servers/{id}/chunky", a.enqueueChunky)
 	m.HandleFunc("GET /api/isles/admin/servers/{id}/identities", a.gameIdentities)
 	return m
 }

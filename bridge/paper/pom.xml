@@ -9,8 +9,10 @@
     <repository><id>viaversion</id><url>https://repo.viaversion.com/</url></repository>
     <repository><id>enginehub</id><url>https://maven.enginehub.org/repo/</url></repository>
     <repository><id>jitpack</id><url>https://jitpack.io</url></repository>
+    <repository><id>codemc</id><url>https://repo.codemc.io/repository/maven-public/</url></repository>
   </repositories>
   <dependencies>
+    <dependency><groupId>org.popcraft</groupId><artifactId>chunky-common</artifactId><version>1.4.40</version><scope>provided</scope></dependency>
     <dependency><groupId>org.spigotmc</groupId><artifactId>spigot-api</artifactId><version>1.21.1-R0.1-SNAPSHOT</version><scope>provided</scope></dependency>
     <dependency><groupId>com.google.code.gson</groupId><artifactId>gson</artifactId><version>2.11.0</version></dependency>
     <dependency><groupId>net.luckperms</groupId><artifactId>api</artifactId><version>5.4</version><scope>provided</scope></dependency>

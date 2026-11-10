@@ -129,7 +129,62 @@ try {
     finally { await writeFile(join(dir,"economy-observation.json"),JSON.stringify(observation ?? null,null,2)); }
     economy = "balance-and-publisher-format-observed";
   }
-  const manifest = { server: heartbeat.snapshot.platform, minecraft: heartbeat.snapshot.minecraft, heartbeat: true, inGameLink: true, gameName: linked[0].identity.name, whitelist: "applied", member, placeholder, protocols, regions, economy, providers: Object.keys((await api("admin/servers/live/bridge")).snapshot.plugins).sort() };
+  let chunky = "not-installed";
+  if (currentProviders.Chunky) {
+    const operation = async (action, extra = {}) => {
+      const task = await api("admin/servers/live/chunky", "POST", { world: "world", action, ...extra });
+      await waitFor(async () => {
+        const result = (await api("admin/servers/live/tasks")).find((t) => t.id === task.id);
+        if (result?.status === "failed") throw new Error(`Chunky ${action}: ${result.error}`);
+        return result?.status === "applied";
+      });
+    };
+    const worldState = (state) => waitFor(async () => {
+      const world = (await api("admin/servers/live/bridge")).snapshot.chunky?.find((w) => w.world === "world");
+      return world?.state === state && world;
+    });
+    const restartGame = async () => {
+      bot?.quit(); bot = undefined;
+      game.stdin.write("stop\n");
+      await waitFor(() => game.exitCode !== null, 60_000);
+      const restartedAt = Date.now();
+      game = spawn("java", ["-Xms256M", "-Xmx1536M", "-jar", "server.jar", "--nogui"], { cwd: work });
+      capture(game, "paper-restarted");
+      await waitFor(async () => Date.parse((await api("admin/servers/live/bridge")).snapshot.receivedAt) > restartedAt, 240_000);
+    };
+    await worldState("idle");
+    await operation("start", { shape: "square", centerX: 10000, centerZ: 10000, radius: 1024 });
+    const running = await worldState("running");
+    assert(running.progress.total > 0);
+    await operation("pause");
+    const paused = await worldState("paused");
+    assert(paused.progress.chunks > 0, "No real chunks were generated");
+    // A game-server restart must reconstruct paused state from Chunky's own
+    // task store, not from an in-memory Bridge event history.
+    await restartGame();
+    await worldState("paused");
+    await operation("continue");
+    const resumed = await worldState("running");
+    await operation("cancel");
+    const cancelled = await worldState("cancelled");
+    await operation("start", { shape: "circle", centerX: 20000, centerZ: 20000, radius: 1024 });
+    await worldState("running");
+    await operation("pause");
+    await worldState("paused");
+    await operation("cancel");
+    await worldState("cancelled");
+    await operation("start", { shape: "square", centerX: 0, centerZ: 0, radius: 32 });
+    const completed = await worldState("completed");
+    assert.equal(completed.progress.percent, 100);
+    assert(completed.progress.chunks >= completed.progress.total);
+    assert.equal(completed.progress.etaSeconds, undefined, "Elapsed completion time was mislabeled as ETA");
+    await restartGame();
+    const terminalAfterRestart = (await api("admin/servers/live/bridge")).snapshot.chunky.find((w) => w.world === "world");
+    assert(["stopped", "completed"].includes(terminalAfterRestart.state), "Saved cancellation flag was misrepresented as known cancellation");
+    await writeFile(join(dir, "chunky-observations.json"), JSON.stringify({ running, paused, resumed, cancelled, completed, terminalAfterRestart }, null, 2));
+    chunky = "generated-paused-restarted-resumed-cancelled-running-and-paused-completed";
+  }
+  const manifest = { server: heartbeat.snapshot.platform, minecraft: heartbeat.snapshot.minecraft, heartbeat: true, inGameLink: true, gameName: linked[0].identity.name, whitelist: "applied", member, placeholder, protocols, regions, economy, chunky, providers: Object.keys((await api("admin/servers/live/bridge")).snapshot.plugins).sort() };
   await writeFile(join(dir, "scenario-result.json"), JSON.stringify(manifest, null, 2));
   console.log(JSON.stringify(manifest));
 } finally {

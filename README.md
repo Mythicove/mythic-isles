@@ -14,6 +14,7 @@ Optional self-hosted Minecraft server directory and integration service for Myth
 - Fixed-origin Modrinth and Hangar catalog search for self-hosted launchers and site content; no arbitrary upstream proxy.
 - Connection secrets encrypted with AES-256-GCM using a deployment key kept outside the data directory. Tokens are never returned by configuration APIs.
 - Paper-compatible Java 21 Bridge: one-time verified game identity linking, owner-only profile data, durable whitelist and global LuckPerms membership tasks, optional PlaceholderAPI and spark observations. See `bridge/paper/README.md` for tested versions and live scenario.
+- Chunky world pregeneration: reported worlds, square/circle selections, progress and provider ETA, pause/resume/cancel (including paused tasks). Non-idempotent operations are durably claimed once; uncertain dispatches are not automatically replayed.
 
 These adapters have HTTP/TCP/UDP protocol scenario coverage. Installed panel/plugin versions still need deployment-specific verification. Pterodactyl's WebSocket console and MCSManager SSO/live streams are not implemented here yet.
 
