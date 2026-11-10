@@ -1,11 +1,12 @@
 // Real-server integration scenario. Requires an explicitly supplied Paper-compatible
 // server JAR; no fake Bukkit implementation or mocked plugin API is used.
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtemp, mkdir, copyFile, writeFile, readdir } from "node:fs/promises";
+import { mkdtemp, mkdir, copyFile, writeFile, readdir, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "node:net";
+import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
 import mineflayer from "mineflayer";
 
@@ -17,13 +18,14 @@ console.log(`Scenario directory: ${dir}`);
 const freePort = () => new Promise((resolve, reject) => { const s = createServer(); s.on("error", reject); s.listen(0, "127.0.0.1", () => { const port = s.address().port; s.close(() => resolve(port)); }); });
 const servicePort = await freePort();
 const gamePort = await freePort();
+const bedrockPort = await freePort();
 const origin = `http://127.0.0.1:${servicePort}`;
 const admin = "live-scenario-service-token-32-characters";
 const binary = join(dir, process.platform === "win32" ? "isles.exe" : "isles");
 const build = spawnSync("go", ["build", "-o", binary, "./cmd/isles"], { cwd: root, env: { ...process.env, GOWORK: "off" }, stdio: "inherit" });
 if (build.status !== 0) throw new Error("Build Isles before live scenario failed");
 const service = spawn(binary, [], { env: { ...process.env, ISLES_LISTEN: `127.0.0.1:${servicePort}`, ISLES_DATA_DIR: join(dir, "data"), ISLES_ADMIN_TOKEN: admin, ISLES_SECRET_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" } });
-let game, bot;
+let game, bot, bedrock;
 const outputs = [];
 const capture = (p, name) => { for (const stream of [p.stdout, p.stderr]) stream?.on("data", (data) => { const text = data.toString(); outputs.push(`[${name}] ${text}`); if (/ERROR|Exception|Done \(/.test(text)) console.log(text); }); };
 capture(service, "isles");
@@ -67,6 +69,13 @@ try {
     await mkdir(join(work, "plugins", "Plan"), { recursive: true });
     await writeFile(join(work, "plugins", "Plan", "config.yml"), `Webserver:\n  Internal_IP: 127.0.0.1\n  Port: ${await freePort()}\nData_gathering:\n  Geolocations: false\nPlugin:\n  Update_notifications:\n    Check_for_updates: false\n`);
   }
+  if ((await readdir(join(work, "plugins"))).includes("Geyser-Spigot.jar")) {
+    const floodgate = (await readdir(join(work, "plugins"))).includes("floodgate-spigot.jar");
+    await mkdir(join(work, "plugins", "Geyser-Spigot"), { recursive: true });
+    // Loopback-only unsigned protocol fixture. This is NOT a production config
+    // or a claim that an Xbox account was authenticated.
+    await writeFile(join(work, "plugins", "Geyser-Spigot", "config.yml"), `bedrock:\n  address: 127.0.0.1\n  port: ${bedrockPort}\nremote:\n  address: auto\n  auth-type: ${floodgate ? "floodgate" : "offline"}\nenable-proxy-connections: true\ncommand-suggestions: false\nmetrics:\n  enabled: false\nconfig-version: 4\n`);
+  }
   game = spawn("java", ["-Xms256M", "-Xmx1536M", "-jar", "server.jar", "--nogui"], { cwd: work });
   capture(game, "paper");
   const heartbeat = await waitFor(async () => { if (game.exitCode !== null) throw new Error("Game server exited before heartbeat"); const result = await api("admin/servers/live/bridge"); return result.fresh && result; }, 240_000);
@@ -92,6 +101,38 @@ try {
     member = "granted-and-revoked";
   }
   const currentProviders = (await api("admin/servers/live/bridge")).snapshot.plugins;
+  let crossplay = "not-installed";
+  if (currentProviders["Geyser-Spigot"]) {
+    const versions = await waitFor(async () => (await api("admin/servers/live/bridge")).snapshot.crossplay);
+    assert(versions.bedrockVersions.length > 0);
+    const javaProfile = (await api("players/website-player/links", "GET", undefined, admin, "website-player"))[0];
+    assert.equal(javaProfile.identity.platform, "java");
+    assert.equal(javaProfile.player.connection, undefined, "Java client was classified by Floodgate prefix/UUID heuristics");
+    const bedrockProtocol = (await import("bedrock-protocol")).default;
+    bedrock = bedrockProtocol.createClient({ host: "127.0.0.1", port: bedrockPort, username: "BedrockTester", offline: true, version: "1.21.100", raknetBackend: "raknet-native", skipPing: true, viewDistance: 2, autoInitPlayer: false });
+    bedrock.on("error", (error) => console.log(`Bedrock: ${error.message}`));
+    const packetNames = [];
+    bedrock.on("packet", (packet) => { if (packetNames.length < 1000) packetNames.push(packet.data.name); });
+    await new Promise((resolve, reject) => { const timer = setTimeout(() => reject(new Error(`Bedrock start_game timed out: ${packetNames.join(",")}`)), 90_000); bedrock.once("start_game", () => { clearTimeout(timer); resolve(); }); bedrock.once("kick", (reason) => { clearTimeout(timer); reject(new Error(`Bedrock kicked: ${JSON.stringify(reason)}`)); }); });
+    bedrock.write("set_local_player_as_initialized", { runtime_entity_id: bedrock.entityId });
+    const pair = await api("players/bedrock-owner/pair", "POST", { server: "live" }, admin, "bedrock-owner");
+    bedrock.write("command_request", { command: `/mythic link ${pair.code}`, origin: { type: "player", uuid: bedrock.profile.uuid, request_id: randomUUID(), player_entity_id: 0n }, internal: false, version: 66 });
+    const linkedBedrock = await waitFor(async () => (await api("players/bedrock-owner/links", "GET", undefined, admin, "bedrock-owner"))[0]);
+    assert.equal(linkedBedrock.identity.platform, "bedrock");
+    const observed = await waitFor(async () => { const profile = (await api("players/bedrock-owner/links", "GET", undefined, admin, "bedrock-owner"))[0]; return profile?.player?.connection && profile; });
+    assert.equal(observed.player.uuid, observed.identity.uuid);
+    assert.equal(observed.player.connection.version, "1.21.100");
+    assert.equal(observed.player.connection.provider, currentProviders.floodgate ? "floodgate" : "geyser");
+    const whitelist = await api("admin/servers/live/tasks", "POST", { player: "bedrock-owner", kind: "whitelist", grant: true });
+    await waitFor(async () => (await api("admin/servers/live/tasks")).some((task) => task.id === whitelist.id && task.status === "applied"));
+    const whitelisted = JSON.parse(await readFile(join(work, "whitelist.json"), "utf8"));
+    assert(whitelisted.some((entry) => entry.uuid === observed.identity.uuid), "Membership targeted a generated/prefixed UUID instead of Bukkit's actual UUID");
+    await api("admin/servers/bedrock", "PUT", { name: "Bedrock endpoint", edition: "bedrock", address: `127.0.0.1:${bedrockPort}`, published: true, links: [] });
+    assert.equal((await api("servers/bedrock/status")).reachable, true);
+    await writeFile(join(dir, "crossplay-observations.json"), JSON.stringify({ versions, javaProfile, bedrock: observed, whitelist: "actual-bukkit-uuid", authentication: "unsigned-loopback-protocol-fixture-not-Xbox-authentication" }, null, 2));
+    bedrock.disconnect(); bedrock = undefined;
+    crossplay = "bedrock-udp-start-game-in-game-binding-version-and-bukkit-whitelist-observed";
+  }
   if (currentProviders.spark) {
     await waitFor(async () => { const stats = (await api("admin/servers/live/bridge")).snapshot; return stats.tps > 0 && stats.mspt >= 0 && Number.isFinite(stats.cpu); });
   }
@@ -256,10 +297,11 @@ try {
     await writeFile(join(dir, "chunky-observations.json"), JSON.stringify({ running, paused, resumed, cancelled, completed, terminalAfterRestart }, null, 2));
     chunky = "generated-paused-restarted-resumed-cancelled-running-and-paused-completed";
   }
-  const manifest = { server: heartbeat.snapshot.platform, minecraft: heartbeat.snapshot.minecraft, heartbeat: true, inGameLink: true, gameName: linked[0].identity.name, whitelist: "applied", member, placeholder, protocols, regions, economy, chunky, plan, towny, providers: Object.keys((await api("admin/servers/live/bridge")).snapshot.plugins).sort() };
+  const manifest = { server: heartbeat.snapshot.platform, minecraft: heartbeat.snapshot.minecraft, heartbeat: true, inGameLink: true, gameName: linked[0].identity.name, whitelist: "applied", member, placeholder, protocols, regions, economy, chunky, plan, towny, crossplay, providers: Object.keys((await api("admin/servers/live/bridge")).snapshot.plugins).sort() };
   await writeFile(join(dir, "scenario-result.json"), JSON.stringify(manifest, null, 2));
   console.log(JSON.stringify(manifest));
 } finally {
+  bedrock?.disconnect();
   bot?.quit();
   if (game && game.exitCode === null) {
     game.stdin.write("stop\n");

@@ -28,6 +28,7 @@ type PlayerSnapshot struct {
 	Regions          []GameRegion      `json:"regions,omitempty"`
 	RegionsTruncated bool              `json:"regionsTruncated,omitempty"`
 	Economy          *GameEconomy      `json:"economy,omitempty"`
+	Connection       *GameConnection   `json:"connection,omitempty"`
 }
 type GameEconomy struct {
 	Provider  string  `json:"provider"`
@@ -44,19 +45,20 @@ type GameRegion struct {
 	CenterZ int    `json:"centerZ"`
 }
 type BridgeSnapshot struct {
-	Platform         string            `json:"platform"`
-	Minecraft        string            `json:"minecraft"`
-	Plugins          map[string]string `json:"plugins"`
-	Groups           []string          `json:"groups"`
-	TPS              *float64          `json:"tps,omitempty"`
-	MSPT             *float64          `json:"mspt,omitempty"`
-	CPU              *float64          `json:"cpu,omitempty"`
-	Players          []PlayerSnapshot  `json:"players"`
-	ReceivedAt       time.Time         `json:"receivedAt"`
-	ProtocolVersions []string          `json:"protocolVersions,omitempty"`
-	Chunky           []ChunkyWorld     `json:"chunky,omitempty"`
-	Plan             *PlanSnapshot     `json:"plan,omitempty"`
-	Towny            *TownySnapshot    `json:"towny,omitempty"`
+	Platform         string             `json:"platform"`
+	Minecraft        string             `json:"minecraft"`
+	Plugins          map[string]string  `json:"plugins"`
+	Groups           []string           `json:"groups"`
+	TPS              *float64           `json:"tps,omitempty"`
+	MSPT             *float64           `json:"mspt,omitempty"`
+	CPU              *float64           `json:"cpu,omitempty"`
+	Players          []PlayerSnapshot   `json:"players"`
+	ReceivedAt       time.Time          `json:"receivedAt"`
+	ProtocolVersions []string           `json:"protocolVersions,omitempty"`
+	Chunky           []ChunkyWorld      `json:"chunky,omitempty"`
+	Plan             *PlanSnapshot      `json:"plan,omitempty"`
+	Towny            *TownySnapshot     `json:"towny,omitempty"`
+	Crossplay        *CrossplaySnapshot `json:"crossplay,omitempty"`
 }
 type pairing struct {
 	Player  string
@@ -163,7 +165,23 @@ func (a *App) heartbeat(w http.ResponseWriter, r *http.Request) {
 		bad(w, err)
 		return
 	}
+	if snapshot.Crossplay != nil && (snapshot.Crossplay.JavaVersion == "" || len(snapshot.Crossplay.JavaVersion) > 120 || len(snapshot.Crossplay.BedrockVersions) == 0 || len(snapshot.Crossplay.BedrockVersions) > 64) {
+		bad(w, errors.New("invalid crossplay versions"))
+		return
+	}
+	if snapshot.Crossplay != nil {
+		for _, version := range snapshot.Crossplay.BedrockVersions {
+			if version == "" || len(version) > 120 {
+				bad(w, errors.New("invalid Bedrock version"))
+				return
+			}
+		}
+	}
 	for _, p := range snapshot.Players {
+		if p.Connection != nil && (p.Connection.Edition != "bedrock" || !slices.Contains([]string{"geyser", "floodgate"}, p.Connection.Provider) || p.Connection.Version == "" || len(p.Connection.Version) > 120) {
+			bad(w, errors.New("invalid game connection"))
+			return
+		}
 		if p.Economy != nil && (len(p.Economy.Provider) > 120 || len(p.Economy.Formatted) > 256 || len(p.Economy.Currency) > 120) {
 			bad(w, errors.New("invalid economy observation"))
 			return
@@ -248,7 +266,7 @@ func (a *App) linkGame(w http.ResponseWriter, r *http.Request) {
 		bad(w, err)
 		return
 	}
-	if len(input.UUID) < 16 || len(input.UUID) > 64 || len(input.Name) > 64 || len(input.Platform) > 30 {
+	if len(input.UUID) < 16 || len(input.UUID) > 64 || len(input.Name) > 64 || !slices.Contains([]string{"java", "bedrock"}, input.Platform) {
 		bad(w, errors.New("invalid identity"))
 		return
 	}

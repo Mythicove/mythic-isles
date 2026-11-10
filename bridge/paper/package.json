@@ -3,5 +3,5 @@
   "private": true,
   "type": "module",
   "scripts": { "test:live": "node test/live.mjs" },
-  "devDependencies": { "mineflayer": "4.26.0" }
+  "devDependencies": { "mineflayer": "4.26.0", "bedrock-protocol": "3.49.0" }
 }

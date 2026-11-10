@@ -44,6 +44,8 @@ public final class IslesBridge extends JavaPlugin {
     private ChunkyHook chunky;
     private PlanHook plan;
     private TownyHook towny;
+    private GeyserHook geyser;
+    private FloodgateHook floodgate;
 
     @Override public void onEnable() {
         saveDefaultConfig();
@@ -67,6 +69,8 @@ public final class IslesBridge extends JavaPlugin {
         if (enabled("Chunky")) chunky = new ChunkyHook();
         if (enabled("Plan")) plan = new PlanHook();
         if (enabled("Towny")) towny = new TownyHook();
+        if (enabled("Geyser-Spigot")) geyser = new GeyserHook();
+        if (enabled("floodgate")) floodgate = new FloodgateHook();
         Bukkit.getScheduler().runTaskTimer(this, this::observe, 20L, 400L);
         getLogger().info("Bridge enabled. Optional data providers are detected from installed plugins.");
     }
@@ -90,7 +94,7 @@ public final class IslesBridge extends JavaPlugin {
             snapshot.put("platform", Bukkit.getName());
             snapshot.put("minecraft", Bukkit.getBukkitVersion());
             Map<String, String> plugins = new LinkedHashMap<>();
-            for (String name : List.of("LuckPerms", "PlaceholderAPI", "spark", "ViaVersion", "WorldGuard", "Vault", "Chunky", "Plan", "Towny")) {
+            for (String name : List.of("LuckPerms", "PlaceholderAPI", "spark", "ViaVersion", "WorldGuard", "Vault", "Chunky", "Plan", "Towny", "Geyser-Spigot", "floodgate")) {
                 var plugin = Bukkit.getPluginManager().getPlugin(name);
                 if (plugin != null && plugin.isEnabled()) plugins.put(name, plugin.getDescription().getVersion());
             }
@@ -100,10 +104,13 @@ public final class IslesBridge extends JavaPlugin {
             if (spark != null) snapshot.putAll(spark.statistics());
             if (viaVersion != null) snapshot.put("protocolVersions", viaVersion.supportedVersions());
             if (chunky != null) snapshot.put("chunky", chunky.worlds());
+            if (geyser != null) snapshot.put("crossplay", geyser.versions());
             var templates = getConfig().getConfigurationSection("placeholders");
             List<Map<String, Object>> players = Bukkit.getOnlinePlayers().stream().limit(2000).map(p -> {
                 Map<String, Object> value = new LinkedHashMap<>();
                 value.put("uuid", p.getUniqueId().toString()); value.put("name", p.getName());
+                var connection = bedrockConnection(p.getUniqueId());
+                if (connection != null) value.put("connection", connection);
                 if (luckPerms != null) { value.put("group", luckPerms.primaryGroup(p.getUniqueId())); value.put("groups", luckPerms.playerGroups(p.getUniqueId())); }
                 if (viaVersion != null) value.put("clientVersion", viaVersion.playerVersion(p.getUniqueId()));
                 if (worldGuard != null) { var result = worldGuard.regions(p); value.put("regions", result.regions()); value.put("regionsTruncated", result.truncated()); }
@@ -169,8 +176,9 @@ public final class IslesBridge extends JavaPlugin {
         if (!(sender instanceof Player player)) { sender.sendMessage("Run this command in game."); return true; }
         if (args.length != 2 || !args[0].equalsIgnoreCase("link") || !args[1].matches("[a-fA-F0-9]{12}")) return false;
         UUID uuid = player.getUniqueId();
+        var connection = bedrockConnection(uuid);
         if (!linking.add(uuid)) { player.sendMessage("A linking request is already in progress."); return true; }
-        String body = json.toJson(Map.of("code", args[1], "uuid", uuid.toString(), "name", player.getName(), "platform", "java"));
+        String body = json.toJson(Map.of("code", args[1], "uuid", uuid.toString(), "name", player.getName(), "platform", connection == null ? "java" : "bedrock"));
         player.sendMessage("Verifying your website linking code…");
         network.submit(() -> {
             boolean success;
@@ -183,6 +191,11 @@ public final class IslesBridge extends JavaPlugin {
             });
         });
         return true;
+    }
+
+    private Map<String, Object> bedrockConnection(UUID uuid) {
+        var result = floodgate == null ? null : floodgate.connection(uuid);
+        return result != null ? result : geyser == null ? null : geyser.connection(uuid);
     }
 
     private void executeTask(JsonObject task) throws Exception {

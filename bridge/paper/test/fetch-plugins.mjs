@@ -10,6 +10,7 @@ if (!destination) throw new Error("Usage: node test/fetch-plugins.mjs /absolute/
 const dir = resolve(destination);
 await mkdir(dir, { recursive: true });
 const versions = [
+  { project: "geyser", version: "nYyvuBsj", name: "Geyser-Spigot.jar" },
   { project: "towny", version: "pra46LOM", name: "Towny.jar" },
   { project: "plan", version: "YYpJ8C6q", name: "Plan.jar" },
   { project: "chunky", version: "P3y2MXnd", name: "Chunky.jar" },
@@ -31,5 +32,15 @@ for (const entry of versions) {
   await writeFile(join(dir, entry.name), bytes);
   manifest.push({ ...entry, publisherVersion: version.version_number, sha512: hash, url: file.url });
 }
+// Floodgate's Bukkit build is published through the official Geyser download API.
+const floodgate = { project: "floodgate", version: "2.2.5", build: 141, name: "floodgate-spigot.jar" };
+const floodgateURL = `https://download.geysermc.org/v2/projects/floodgate/versions/${floodgate.version}/builds/${floodgate.build}/downloads/spigot`;
+const artifact = await fetch(floodgateURL, { signal: AbortSignal.timeout(120_000) });
+assert(artifact.ok, `Floodgate artifact request failed: ${artifact.status}`);
+const bytes = Buffer.from(await artifact.arrayBuffer());
+const sha256 = createHash("sha256").update(bytes).digest("hex");
+assert.equal(sha256, "21570aff9ce17d6983928e8552777760e1ede5050026b04c686b0ae112e6fd7e");
+await writeFile(join(dir, floodgate.name), bytes);
+manifest.push({ ...floodgate, sha256, url: floodgateURL });
 await writeFile(join(dir, "optional-fixtures.json"), JSON.stringify(manifest, null, 2));
 console.log(JSON.stringify(manifest));
