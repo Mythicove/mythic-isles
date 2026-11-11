@@ -2,6 +2,7 @@ package isles
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -50,6 +51,37 @@ type CatalogVersion struct {
 	Files        []CatalogFile `json:"files"`
 }
 
+type CatalogMatch struct {
+	ProjectID string         `json:"projectId"`
+	Version   CatalogVersion `json:"version"`
+}
+
+type modrinthVersion struct {
+	ID        string   `json:"id"`
+	ProjectID string   `json:"project_id"`
+	Name      string   `json:"name"`
+	Number    string   `json:"version_number"`
+	Channel   string   `json:"version_type"`
+	Versions  []string `json:"game_versions"`
+	Loaders   []string `json:"loaders"`
+	Files     []struct {
+		Name   string            `json:"filename"`
+		URL    string            `json:"url"`
+		Hashes map[string]string `json:"hashes"`
+		Size   int64             `json:"size"`
+	} `json:"files"`
+}
+
+func (v modrinthVersion) catalogVersion() CatalogVersion {
+	files := []CatalogFile{}
+	for _, f := range v.Files {
+		if validURL(f.URL) == nil {
+			files = append(files, CatalogFile{Name: f.Name, URL: f.URL, Hashes: f.Hashes, Size: f.Size})
+		}
+	}
+	return CatalogVersion{ID: v.ID, Name: v.Name, Number: v.Number, Channel: v.Channel, GameVersions: v.Versions, Loaders: v.Loaders, Files: files}
+}
+
 type catalogEntry struct {
 	data    []byte
 	expires time.Time
@@ -87,12 +119,14 @@ func (c *catalogClient) init() error {
 
 func (a *App) catalogRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/isles/catalog/modrinth/search", a.modrinthSearch)
+	m.HandleFunc("GET /api/isles/catalog/modrinth/hash/{hash}", a.modrinthHash)
 	m.HandleFunc("GET /api/isles/catalog/hangar/search", a.hangarSearch)
 	m.HandleFunc("GET /api/isles/catalog/modrinth/versions/{project}", a.modrinthVersions)
 	m.HandleFunc("GET /api/isles/catalog/hangar/versions/{owner}/{project}", a.hangarVersions)
 }
 
 var errCatalogLimit = errors.New("catalog request budget exhausted; try again in a minute")
+var errCatalogNotFound = errors.New("catalog entry not found")
 
 // One bounded cache and admission owner for catalog calls; concurrent identical
 // requests share the cached response. Only deployment-configured origins are used.
@@ -122,6 +156,9 @@ func (a *App) catalogHTTP(ctx context.Context, raw string, out any) error {
 		return errors.New("catalog source unavailable")
 	}
 	defer res.Body.Close()
+	if res.StatusCode == http.StatusNotFound {
+		return errCatalogNotFound
+	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		return fmt.Errorf("catalog source returned HTTP %d", res.StatusCode)
 	}
@@ -286,6 +323,32 @@ func (a *App) hangarSearch(w http.ResponseWriter, r *http.Request) {
 	reply(w, items)
 }
 
+func (a *App) modrinthHash(w http.ResponseWriter, r *http.Request) {
+	hash := strings.ToLower(r.PathValue("hash"))
+	if _, err := hex.DecodeString(hash); err != nil || len(hash) != 128 || r.URL.RawQuery != "" {
+		bad(w, errors.New("a SHA-512 hex digest with no query parameters is required"))
+		return
+	}
+	var result modrinthVersion
+	if err := a.catalogHTTP(r.Context(), a.catalog.modrinth+"/version_file/"+hash+"?algorithm=sha512", &result); err != nil {
+		if errors.Is(err, errCatalogNotFound) {
+			http.Error(w, "file hash not indexed by Modrinth", http.StatusNotFound)
+			return
+		}
+		catalogError(w, err)
+		return
+	}
+	version := result.catalogVersion()
+	// Return only files whose publisher digest matches the requested bytes. An
+	// unexpected response is unavailable, never a successful identification.
+	version.Files = slices.DeleteFunc(version.Files, func(f CatalogFile) bool { return !strings.EqualFold(f.Hashes["sha512"], hash) })
+	if result.ProjectID == "" || result.ID == "" || result.Name == "" || result.Number == "" || result.Channel == "" || result.Versions == nil || result.Loaders == nil || len(version.Files) == 0 {
+		upstreamError(w, errors.New("catalog returned no matching file identity"))
+		return
+	}
+	reply(w, CatalogMatch{ProjectID: result.ProjectID, Version: version})
+}
+
 func (a *App) modrinthVersions(w http.ResponseWriter, r *http.Request) {
 	q, err := catalogFilters(r)
 	if err != nil {
@@ -299,20 +362,7 @@ func (a *App) modrinthVersions(w http.ResponseWriter, r *http.Request) {
 			params.Set(upstream, string(b))
 		}
 	}
-	var versions []struct {
-		ID       string   `json:"id"`
-		Name     string   `json:"name"`
-		Number   string   `json:"version_number"`
-		Channel  string   `json:"version_type"`
-		Versions []string `json:"game_versions"`
-		Loaders  []string `json:"loaders"`
-		Files    []struct {
-			Name   string            `json:"filename"`
-			URL    string            `json:"url"`
-			Hashes map[string]string `json:"hashes"`
-			Size   int64             `json:"size"`
-		} `json:"files"`
-	}
+	var versions []modrinthVersion
 	if err := a.catalogHTTP(r.Context(), a.catalog.modrinth+"/project/"+url.PathEscape(r.PathValue("project"))+"/version?"+params.Encode(), &versions); err != nil {
 		catalogError(w, err)
 		return
@@ -323,13 +373,7 @@ func (a *App) modrinthVersions(w http.ResponseWriter, r *http.Request) {
 		if len(items) >= limit {
 			break
 		}
-		files := []CatalogFile{}
-		for _, f := range v.Files {
-			if validURL(f.URL) == nil {
-				files = append(files, CatalogFile{Name: f.Name, URL: f.URL, Hashes: f.Hashes, Size: f.Size})
-			}
-		}
-		items = append(items, CatalogVersion{ID: v.ID, Name: v.Name, Number: v.Number, Channel: v.Channel, GameVersions: v.Versions, Loaders: v.Loaders, Files: files})
+		items = append(items, v.catalogVersion())
 	}
 	reply(w, items)
 }
