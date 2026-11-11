@@ -18,6 +18,8 @@ const versions = [
   { project: "worldguard", version: "J66QOTLZ", name: "WorldGuard.jar" },
   { project: "worldedit", version: "Bu1zaaoc", name: "WorldEdit.jar" },
   { project: "viaversion", version: "Fkfcr89K", name: "ViaVersion.jar" },
+  { project: "viabackwards", version: "1xHfYAKG", name: "ViaBackwards.jar" },
+  { project: "viarewind", version: "EPLCoxMK", name: "ViaRewind.jar" },
 ];
 const manifest = [];
 for (const entry of versions) {

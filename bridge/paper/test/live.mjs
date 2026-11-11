@@ -44,10 +44,18 @@ async function waitFor(check, ms = 120_000) {
   while (Date.now() < end) { try { const value = await check(); if (value) return value; } catch (e) { error = e; } await pause(1000); }
   throw error ?? new Error("Scenario condition timed out");
 }
-async function connectPlayer(username) {
-  const client = mineflayer.createBot({ host: "127.0.0.1", port: gamePort, username, auth: "offline", version: "1.21.1", hideErrors: true });
+async function connectPlayer(username, version = "1.21.1") {
+  const client = mineflayer.createBot({ host: "127.0.0.1", port: gamePort, username, auth: "offline", version, hideErrors: true });
   client.on("error", (error) => console.log(`Client: ${error.message}`));
-  await new Promise((resolve, reject) => { const timer = setTimeout(() => reject(new Error("Game login timed out")), 30_000); client.once("spawn", () => { clearTimeout(timer); resolve(); }); client.once("kicked", (reason) => { clearTimeout(timer); reject(new Error(`Kicked: ${JSON.stringify(reason)}`)); }); });
+  try { await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("Game login timed out")), 30_000);
+    const denied = (reason) => { clearTimeout(timer); reject(new Error(`Game login rejected: ${JSON.stringify(reason)}`)); };
+    client.once("spawn", () => { clearTimeout(timer); resolve(); });
+    client.once("kicked", denied);
+    client.once("end", denied);
+    client.once("error", (error) => denied(error.message));
+  }); }
+  catch (error) { client.end(); throw error; }
   return client;
 }
 try {
@@ -235,6 +243,52 @@ try {
     capture(game, "paper-restarted");
     await waitFor(async () => Date.parse((await api("admin/servers/live/bridge")).snapshot.receivedAt) > restartedAt, 240_000);
   };
+  let legacyProtocols = "not-installed";
+  if (currentProviders.ViaBackwards) {
+    const allowed = (await api("admin/servers/live/bridge")).snapshot.protocolVersions;
+    const clients = [];
+    for (const [username, version, owner] of [
+      ["LegacyTwelve", "1.12.2", "legacy-twelve-owner"],
+      ...(currentProviders.ViaRewind ? [["LegacyEight", "1.8.8", "legacy-eight-owner"]] : []),
+    ]) {
+      const client = await connectPlayer(username, version);
+      try {
+        const code = await api(`players/${owner}/pair`, "POST", { server: "live" }, admin, owner);
+        client.chat(`/mythic link ${code.code}`);
+        const profile = await waitFor(async () => {
+          const value = (await api(`players/${owner}/links`, "GET", undefined, admin, owner))[0];
+          return value?.player?.clientVersion && value;
+        });
+        assert.equal(profile.identity.platform, "java");
+        assert.equal(profile.identity.uuid.replaceAll("-", ""), client._client.uuid.replaceAll("-", ""));
+        assert(allowed.includes(profile.player.clientVersion), "Connected protocol missing from provider support list");
+        assert(profile.player.clientVersion.startsWith(version === "1.8.8" ? "1.8" : "1.12"));
+        clients.push({ requestedVersion: version, identity: profile.identity, player: profile.player });
+      } finally { client.quit(); }
+    }
+    let blocked;
+    if (currentProviders.ViaRewind) {
+      const configPath = join(work, "plugins", "ViaVersion", "config.yml");
+      const config = await readFile(configPath, "utf8");
+      assert(/^block-protocols: \[\]/m.test(config));
+      await writeFile(configPath, config.replace(/^block-protocols: \[\]/m, "block-protocols: [47]").replace(/^block-disconnect-msg:.*$/m, "block-disconnect-msg: Isles blocked protocol fixture"));
+      await restartGame();
+      blocked = await waitFor(async () => {
+        const versions = (await api("admin/servers/live/bridge")).snapshot.protocolVersions;
+        return versions && !versions.some((version) => version.startsWith("1.8")) && versions;
+      });
+      assert(blocked.some((version) => version.startsWith("1.12")));
+      await assert.rejects(connectPlayer("BlockedEight", "1.8.8"), /Isles blocked protocol fixture/);
+      bot = await connectPlayer("IslesTester");
+    }
+    await writeFile(join(dir, "legacy-protocol-observations.json"), JSON.stringify({ allowed, clients, ...(blocked ? { blocked, blockedProtocol: 47, rejectedClient: "1.8.8" } : {}), providers: Object.fromEntries(Object.entries(currentProviders).filter(([name]) => ["ViaVersion", "ViaBackwards", "ViaRewind"].includes(name))), scope: "offline-loopback-client-spawn-binding-and-provider-version-not-all-gameplay-or-proxy-auth" }, null, 2));
+    legacyProtocols = currentProviders.ViaRewind ? "1.12.2-and-1.8.8-bound-protocol47-blocked-and-rejected" : "1.12.2-spawn-binding-and-client-version-observed";
+  } else if (currentProviders.ViaVersion) {
+    const allowed = (await api("admin/servers/live/bridge")).snapshot.protocolVersions;
+    assert(!allowed.some((version) => version.startsWith("1.12")), "ViaVersion alone advertised a backwards conversion");
+    await assert.rejects(connectPlayer("UnsupportedOld", "1.12.2"), /Game login rejected:/);
+    legacyProtocols = "viaversion-only-does-not-advertise-or-accept-1.12.2";
+  }
   let towny = "not-installed";
   if (currentProviders.Towny) {
     const membership = () => api("players/website-player/links", "GET", undefined, admin, "website-player");
@@ -345,7 +399,7 @@ try {
     await writeFile(join(dir, "chunky-observations.json"), JSON.stringify({ running, paused, resumed, cancelled, completed, terminalAfterRestart }, null, 2));
     chunky = "generated-paused-restarted-resumed-cancelled-running-and-paused-completed";
   }
-  const manifest = { server: heartbeat.snapshot.platform, minecraft: heartbeat.snapshot.minecraft, heartbeat: true, inGameLink: true, gameName: linked[0].identity.name, whitelist: "applied", member, placeholder, protocols, regions, economy, chunky, plan, towny, crossplay, voicechat, gc, providers: Object.keys((await api("admin/servers/live/bridge")).snapshot.plugins).sort() };
+  const manifest = { server: heartbeat.snapshot.platform, minecraft: heartbeat.snapshot.minecraft, heartbeat: true, inGameLink: true, gameName: linked[0].identity.name, whitelist: "applied", member, placeholder, protocols, regions, economy, chunky, plan, towny, crossplay, voicechat, gc, legacyProtocols, providers: Object.keys((await api("admin/servers/live/bridge")).snapshot.plugins).sort() };
   await writeFile(join(dir, "scenario-result.json"), JSON.stringify(manifest, null, 2));
   console.log(JSON.stringify(manifest));
 } finally {
