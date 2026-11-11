@@ -21,10 +21,11 @@ const gamePort = await freePort();
 const bedrockPort = await freePort();
 const origin = `http://127.0.0.1:${servicePort}`;
 const admin = "live-scenario-service-token-32-characters";
+const metricsToken = "live-scenario-metrics-token-32-characters";
 const binary = join(dir, process.platform === "win32" ? "isles.exe" : "isles");
 const build = spawnSync("go", ["build", "-o", binary, "./cmd/isles"], { cwd: root, env: { ...process.env, GOWORK: "off" }, stdio: "inherit" });
 if (build.status !== 0) throw new Error("Build Isles before live scenario failed");
-const service = spawn(binary, [], { env: { ...process.env, ISLES_LISTEN: `127.0.0.1:${servicePort}`, ISLES_DATA_DIR: join(dir, "data"), ISLES_ADMIN_TOKEN: admin, ISLES_SECRET_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" } });
+const service = spawn(binary, [], { env: { ...process.env, ISLES_LISTEN: `127.0.0.1:${servicePort}`, ISLES_DATA_DIR: join(dir, "data"), ISLES_ADMIN_TOKEN: admin, ISLES_METRICS_TOKEN: metricsToken, ISLES_SECRET_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" } });
 let game, bot, bedrock, voiceClient, prometheus;
 let prometheusQuery;
 let prometheusVersion;
@@ -101,7 +102,7 @@ try {
   if (process.env.ISLES_TEST_PROMETHEUS_DIR) {
     const promPort = await freePort();
     const config = join(dir, "prometheus.yml");
-    await writeFile(config, `global:\n  scrape_interval: 1s\n  scrape_timeout: 1s\nscrape_configs:\n  - job_name: isles\n    authorization:\n      type: Bearer\n      credentials: ${JSON.stringify(admin)}\n    static_configs:\n      - targets: ["127.0.0.1:${servicePort}"]\n  - job_name: isles-no-credential\n    static_configs:\n      - targets: ["127.0.0.1:${servicePort}"]\n`);
+    await writeFile(config, `global:\n  scrape_interval: 1s\n  scrape_timeout: 1s\nscrape_configs:\n  - job_name: isles\n    authorization:\n      type: Bearer\n      credentials: ${JSON.stringify(metricsToken)}\n    static_configs:\n      - targets: ["127.0.0.1:${servicePort}"]\n  - job_name: isles-no-credential\n    static_configs:\n      - targets: ["127.0.0.1:${servicePort}"]\n`);
     const binary = join(process.env.ISLES_TEST_PROMETHEUS_DIR, process.platform === "win32" ? "prometheus.exe" : "prometheus");
     const version = spawnSync(binary, ["--version"], { encoding: "utf8", timeout: 10_000 });
     assert.equal(version.status, 0, "Prometheus binary version check failed");
@@ -118,6 +119,8 @@ try {
     };
     await waitFor(async () => (await prometheusQuery('up{job="isles"}'))[0]?.value[1] === "1", 30_000);
     await waitFor(async () => (await prometheusQuery('up{job="isles-no-credential"}'))[0]?.value[1] === "0", 30_000);
+    assert.equal((await fetch(`${origin}/api/isles/admin/config`, { headers: { Authorization: `Bearer ${metricsToken}` } })).status, 401);
+    assert.equal((await fetch(`${origin}/metrics`, { headers: { Authorization: `Bearer ${admin}` } })).status, 401);
   }
   const pair = await api("players/website-player/pair", "POST", { server: "live" }, admin, "website-player");
   bot = await connectPlayer("IslesTester");

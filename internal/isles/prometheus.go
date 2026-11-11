@@ -2,6 +2,7 @@ package isles
 
 import (
 	"bytes"
+	"crypto/subtle"
 	"net/http"
 	"slices"
 	"time"
@@ -13,7 +14,11 @@ import (
 // Snapshot gauges, not accumulating counters: provider baselines can reset.
 // Only bounded server/collector labels enter this private scrape surface.
 func (a *App) prometheus(w http.ResponseWriter, r *http.Request) {
-	if !a.authorized(r) {
+	credential := a.metricsToken
+	if credential == "" {
+		credential = a.token
+	}
+	if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+credential)) != 1 {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}

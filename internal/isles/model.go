@@ -72,16 +72,17 @@ type Config struct {
 }
 
 type App struct {
-	mu       sync.Mutex
-	config   Config
-	dir      string
-	token    string
-	aead     cipher.AEAD
-	http     *http.Client
-	probes   map[string]*probeEntry
-	bridges  map[string]BridgeSnapshot
-	pairings map[string]pairing
-	catalog  catalogClient
+	mu           sync.Mutex
+	config       Config
+	dir          string
+	token        string
+	metricsToken string
+	aead         cipher.AEAD
+	http         *http.Client
+	probes       map[string]*probeEntry
+	bridges      map[string]BridgeSnapshot
+	pairings     map[string]pairing
+	catalog      catalogClient
 }
 
 // Open uses one process per data directory. Secrets are encrypted using a separate
@@ -89,6 +90,10 @@ type App struct {
 func Open(dir, token, key string) (*App, error) {
 	if len(token) < 32 {
 		return nil, errors.New("ISLES_ADMIN_TOKEN must contain at least 32 characters")
+	}
+	metricsToken := os.Getenv("ISLES_METRICS_TOKEN")
+	if metricsToken != "" && (len(metricsToken) < 32 || metricsToken == token) {
+		return nil, errors.New("ISLES_METRICS_TOKEN must contain at least 32 characters and differ from ISLES_ADMIN_TOKEN")
 	}
 	k, err := base64.StdEncoding.DecodeString(key)
 	if err != nil || len(k) != 32 {
@@ -104,6 +109,7 @@ func Open(dir, token, key string) (*App, error) {
 	}
 	a := &App{dir: dir, token: token, aead: aead, probes: map[string]*probeEntry{}, http: &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}}
 	a.bridges = map[string]BridgeSnapshot{}
+	a.metricsToken = metricsToken
 	a.pairings = map[string]pairing{}
 	if err := a.catalog.init(); err != nil {
 		return nil, err

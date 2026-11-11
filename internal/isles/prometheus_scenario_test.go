@@ -115,3 +115,52 @@ func TestPrometheusBridgeExportScenario(t *testing.T) {
 		t.Fatal("deleted server series retained")
 	}
 }
+
+func TestPrometheusReadOnlyCredentialScenario(t *testing.T) {
+	const metricsToken = "scenario-readonly-metrics-token-32-characters"
+	t.Setenv("ISLES_METRICS_TOKEN", metricsToken)
+	app, err := isles.Open(t.TempDir(), token, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := httptest.NewServer(app.Handler())
+	defer api.Close()
+	call := func(path, credential string) int {
+		req, err := http.NewRequest("GET", api.URL+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if credential != "" {
+			req.Header.Set("Authorization", "Bearer "+credential)
+		}
+		res, err := api.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		return res.StatusCode
+	}
+	for _, tc := range []struct {
+		path, credential string
+		status           int
+	}{
+		{"/metrics", metricsToken, 200},
+		{"/metrics", token, 401},
+		{"/metrics", "wrong", 401},
+		{"/api/isles/admin/config", metricsToken, 401},
+		{"/api/isles/admin/config", token, 200},
+		{"/healthz", "", 200},
+	} {
+		if got := call(tc.path, tc.credential); got != tc.status {
+			t.Fatalf("%s: got %d, want %d", tc.path, got, tc.status)
+		}
+	}
+	t.Setenv("ISLES_METRICS_TOKEN", "too-short")
+	if _, err := isles.Open(t.TempDir(), token, key); err == nil {
+		t.Fatal("short metrics token accepted")
+	}
+	t.Setenv("ISLES_METRICS_TOKEN", token)
+	if _, err := isles.Open(t.TempDir(), token, key); err == nil {
+		t.Fatal("shared metrics and admin token accepted")
+	}
+}
