@@ -30,7 +30,7 @@ Only the owning website session may fetch linked profile data. A game server is 
 
 - **LuckPerms:** reports loaded groups and online players' primary/direct global groups; administrator can select a verified identity and grant/revoke an existing global group. This does not manage contextual permissions, expiry, tracks or game OP.
 - **PlaceholderAPI:** evaluates only server-owner-configured templates; unresolved placeholders are omitted. Install the required expansions yourself. No arbitrary template endpoint is exposed to players.
-- **spark:** uses its public service/API, including the server-bundled Paper service. Reports available TPS, MSPT and system CPU; absent measurements remain absent.
+- **spark:** uses its public service/API, including the server-bundled Paper service. Reports available TPS, MSPT, system CPU and administrator-only GC collection counts/time per collector. GC counters use spark's normal-operation baseline, excluding startup activity; values reset with the provider/server, not a recent interval or pause histogram. Unknown counters are individually omitted rather than changed to zero. No GC control endpoint is exposed.
 - **Whitelist:** idempotently sets the chosen linked UUID's whitelist membership.
 - **Vault:** reads the currently registered Economy provider's balance, formatted amount and currency for an online player who already has an economy account. No account creation, transfer, deposit or withdrawal endpoint is exposed. An installed Vault without an enabled Economy provider yields no balance field. The API's numeric precision and formatted result are kept as returned by the provider.
 - **ViaVersion 5:** reads server-supported protocol names after configured blocks, and the online player's actual protocol version. These are observations, not a guarantee of proxy, modpack or authentication compatibility.
@@ -60,7 +60,7 @@ npm ci
 PAPER_SERVER_JAR=/path/to/server.jar ISLES_TEST_PLUGIN_DIR=/path/to/optional-plugin-jars npm run test:live
 ```
 
-The test runs a real server on loopback, connects a Mineflayer 1.21.1 client, executes the linking command, applies a whitelist task and verifies the returned profile. With LuckPerms it creates a group, grants and revokes it, and checks observed membership. With PlaceholderAPI it downloads the Server expansion and verifies actual resolution. With spark it verifies actual performance fields. The run leaves `scenario-result.json` and process logs in a printed temporary directory.
+The test runs a real server on loopback, connects a Mineflayer 1.21.1 client, executes the linking command, applies a whitelist task and verifies the returned profile. With LuckPerms it creates a group, grants and revokes it, and checks observed membership. With PlaceholderAPI it downloads the Server expansion and verifies actual resolution. With spark it verifies performance fields, uses JDK `jcmd` (required on PATH) to request `GC.run` on the owned server process, and checks counter growth in the next real heartbeat. It retains `gc-observations.json`, `scenario-result.json` and process logs in a printed temporary directory. `ISLES_TEST_DISABLE_SPARK=1` disables Paper's bundled spark in the temporary fixture config to exercise the absent-provider path; it is not a Bridge deployment setting.
 
 Locally validated: Purpur 1.21.1/2329, LuckPerms 5.5.71, PlaceholderAPI 2.12.3 and Purpur's bundled spark service. Optional-plugin JARs remain external test inputs; no upstream binary is redistributed in this repository.
 

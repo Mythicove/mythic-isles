@@ -65,6 +65,10 @@ try {
   await writeFile(join(work, "eula.txt"), "eula=true\n");
   await writeFile(join(work, "server.properties"), `server-ip=127.0.0.1\nserver-port=${gamePort}\nonline-mode=false\nenforce-secure-profile=false\nspawn-protection=0\nview-distance=2\nsimulation-distance=2\ngenerate-structures=false\nspawn-monsters=false\nspawn-animals=false\nspawn-npcs=false\nmax-players=5\n`);
   await writeFile(join(work, "plugins", "MythicIsles", "config.yml"), `url: '${origin}'\nserver: live\ntoken: '${secret.token}'\nplaceholders:\n  server_name: '%server_name%'\n`);
+  if (process.env.ISLES_TEST_DISABLE_SPARK === "1") {
+    await mkdir(join(work, "config"), { recursive: true });
+    await writeFile(join(work, "config", "paper-global.yml"), "_version: 29\nspark:\n  enabled: false\n");
+  }
   if ((await readdir(join(work, "plugins"))).includes("Plan.jar")) {
     await mkdir(join(work, "plugins", "Plan"), { recursive: true });
     await writeFile(join(work, "plugins", "Plan", "config.yml"), `Webserver:\n  Internal_IP: 127.0.0.1\n  Port: ${await freePort()}\nData_gathering:\n  Geolocations: false\nPlugin:\n  Update_notifications:\n    Check_for_updates: false\n`);
@@ -158,8 +162,27 @@ try {
     bedrock.disconnect(); bedrock = undefined;
     crossplay = "bedrock-udp-start-game-in-game-binding-version-and-bukkit-whitelist-observed";
   }
+  let gc = "not-installed";
   if (currentProviders.spark) {
     await waitFor(async () => { const stats = (await api("admin/servers/live/bridge")).snapshot; return stats.tps > 0 && stats.mspt >= 0 && Number.isFinite(stats.cpu); });
+    const before = await waitFor(async () => (await api("admin/servers/live/bridge")).snapshot.garbageCollectors);
+    assert(Object.keys(before).length > 0);
+    const forced = spawnSync("jcmd", [String(game.pid), "GC.run"], { encoding: "utf8", timeout: 30_000 });
+    assert.equal(forced.status, 0, `JDK jcmd GC.run failed: ${forced.stderr ?? forced.error}`);
+    const after = await waitFor(async () => {
+      const value = (await api("admin/servers/live/bridge")).snapshot.garbageCollectors;
+      return value && Object.entries(value).some(([name, stats]) => stats.collections > (before[name]?.collections ?? 0)) && value;
+    });
+    for (const [name, stats] of Object.entries(after)) {
+      if (stats.collections !== undefined) assert(stats.collections >= 0);
+      if (stats.timeMs !== undefined) assert(stats.timeMs >= (before[name]?.timeMs ?? 0));
+    }
+    assert.equal(JSON.stringify(await api("servers")).includes("garbageCollectors"), false);
+    assert.equal(JSON.stringify(await api("players/website-player/links", "GET", undefined, admin, "website-player")).includes("garbageCollectors"), false);
+    await writeFile(join(dir, "gc-observations.json"), JSON.stringify({ before, after, provider: "spark bundled with Purpur 1.21.1-2329", scope: "provider-normal-operation-baseline-not-jvm-lifetime-or-rolling-interval", trigger: "JDK jcmd GC.run" }, null, 2));
+    gc = "provider-counters-increased-after-jcmd-gc-run";
+  } else if (process.env.ISLES_TEST_DISABLE_SPARK === "1") {
+    assert.equal((await api("admin/servers/live/bridge")).snapshot.garbageCollectors, undefined);
   }
   let placeholder = "not-installed";
   if (heartbeat.snapshot.plugins.PlaceholderAPI) {
@@ -322,7 +345,7 @@ try {
     await writeFile(join(dir, "chunky-observations.json"), JSON.stringify({ running, paused, resumed, cancelled, completed, terminalAfterRestart }, null, 2));
     chunky = "generated-paused-restarted-resumed-cancelled-running-and-paused-completed";
   }
-  const manifest = { server: heartbeat.snapshot.platform, minecraft: heartbeat.snapshot.minecraft, heartbeat: true, inGameLink: true, gameName: linked[0].identity.name, whitelist: "applied", member, placeholder, protocols, regions, economy, chunky, plan, towny, crossplay, voicechat, providers: Object.keys((await api("admin/servers/live/bridge")).snapshot.plugins).sort() };
+  const manifest = { server: heartbeat.snapshot.platform, minecraft: heartbeat.snapshot.minecraft, heartbeat: true, inGameLink: true, gameName: linked[0].identity.name, whitelist: "applied", member, placeholder, protocols, regions, economy, chunky, plan, towny, crossplay, voicechat, gc, providers: Object.keys((await api("admin/servers/live/bridge")).snapshot.plugins).sort() };
   await writeFile(join(dir, "scenario-result.json"), JSON.stringify(manifest, null, 2));
   console.log(JSON.stringify(manifest));
 } finally {

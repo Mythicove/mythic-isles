@@ -3,8 +3,10 @@ package isles_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/Mythicove/mythic-isles/internal/isles"
@@ -83,6 +85,8 @@ func TestVerifiedIdentityAndMemberTaskScenario(t *testing.T) {
 	town := map[string]any{"id": "11111111-1111-1111-1111-111111111111", "name": "PrivateHarbor", "residents": 2, "claimedTownBlocks": 1, "open": true, "public": false, "nation": map[string]string{"id": "22222222-2222-2222-2222-222222222222", "name": "Union"}}
 	resident := map[string]any{"uuid": identity["uuid"], "mayor": false, "king": false, "townRanks": []string{"assistant"}, "nationRanks": []string{}, "town": town, "observedAt": "2026-11-10T10:02:00Z"}
 	snapshot["towny"] = map[string]any{"townCount": 101, "nationCount": 1, "towns": []any{town}, "nations": []any{}, "residents": []any{resident}, "observedAt": "2026-11-10T10:02:00Z"}
+	collectors := map[string]any{"G1 Young Generation": map[string]any{"collections": 2, "timeMs": 9}, "G1 Old Generation": map[string]any{"collections": 0}}
+	snapshot["garbageCollectors"] = collectors
 	status, b = call("POST", "/api/isles/bridge/survival/heartbeat", bridgeToken, "", snapshot)
 	mustStatus(t, 204, status, b)
 	status, b = call("GET", "/api/isles/players/site-player/links", token, "site-player", nil)
@@ -107,6 +111,57 @@ func TestVerifiedIdentityAndMemberTaskScenario(t *testing.T) {
 	if !bytes.Contains(b, []byte(`"activity"`)) || !bytes.Contains(b, []byte(`"playtimeMs":90000`)) || bytes.Contains(b, []byte("recordedPlayers")) {
 		t.Fatalf("private Plan projection: %s", b)
 	}
+	if bytes.Contains(b, []byte("garbageCollectors")) {
+		t.Fatal("server GC statistics exposed to a linked player")
+	}
+	status, b = call("GET", "/api/isles/admin/servers/survival/bridge", "", "", nil)
+	mustStatus(t, 401, status, b)
+	status, b = request(t, client, api.URL, "GET", "/api/isles/admin/servers/survival/bridge", nil, true)
+	mustStatus(t, 200, status, b)
+	if !bytes.Contains(b, []byte(`"G1 Old Generation":{"collections":0}`)) || !bytes.Contains(b, []byte(`"G1 Young Generation":{"collections":2,"timeMs":9}`)) {
+		t.Fatalf("GC zero/unknown/provider counters rewritten: %s", b)
+	}
+	status, b = request(t, client, api.URL, "GET", "/api/isles/servers", nil, false)
+	mustStatus(t, 200, status, b)
+	if bytes.Contains(b, []byte("garbageCollectors")) {
+		t.Fatal("GC observations leaked in public directory")
+	}
+	tooManyCollectors := map[string]any{}
+	for i := range 33 {
+		tooManyCollectors[fmt.Sprintf("collector-%d", i)] = map[string]any{}
+	}
+	for _, invalid := range []map[string]any{
+		tooManyCollectors,
+		{strings.Repeat("g", 121): map[string]any{}},
+		{"": map[string]any{}},
+		{"gc": map[string]any{"collections": -1}},
+		{"gc": map[string]any{"timeMs": -1}},
+		{"gc": map[string]any{"collections": 1.5}},
+	} {
+		snapshot["garbageCollectors"] = invalid
+		status, b = call("POST", "/api/isles/bridge/survival/heartbeat", bridgeToken, "", snapshot)
+		mustStatus(t, 400, status, b)
+	}
+	// The provider reset is a new baseline, not a delta to add to old counters.
+	snapshot["garbageCollectors"] = map[string]any{"G1 Young Generation": map[string]any{"collections": 0, "timeMs": 0}, "unknown collector": map[string]any{}}
+	status, b = call("POST", "/api/isles/bridge/survival/heartbeat", bridgeToken, "", snapshot)
+	mustStatus(t, 204, status, b)
+	status, b = request(t, client, api.URL, "GET", "/api/isles/admin/servers/survival/bridge", nil, true)
+	mustStatus(t, 200, status, b)
+	if !bytes.Contains(b, []byte(`"G1 Young Generation":{"collections":0,"timeMs":0}`)) || !bytes.Contains(b, []byte(`"unknown collector":{}`)) {
+		t.Fatalf("provider reset or unknown became fabricated: %s", b)
+	}
+	delete(snapshot, "garbageCollectors")
+	status, b = call("POST", "/api/isles/bridge/survival/heartbeat", bridgeToken, "", snapshot)
+	mustStatus(t, 204, status, b)
+	status, b = request(t, client, api.URL, "GET", "/api/isles/admin/servers/survival/bridge", nil, true)
+	mustStatus(t, 200, status, b)
+	if bytes.Contains(b, []byte("garbageCollectors")) {
+		t.Fatal("unavailable GC observation retained stale counters")
+	}
+	// Continue the existing owner-profile checks with its current response.
+	status, b = call("GET", "/api/isles/players/site-player/links", token, "site-player", nil)
+	mustStatus(t, 200, status, b)
 	if !bytes.Contains(b, []byte(`"voicechat":{"installed":true,"connected":true,"disabled":false}`)) {
 		t.Fatalf("voice state missing or rewritten: %s", b)
 	}

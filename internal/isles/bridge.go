@@ -51,20 +51,25 @@ type GameRegion struct {
 	CenterZ int    `json:"centerZ"`
 }
 type BridgeSnapshot struct {
-	Platform         string             `json:"platform"`
-	Minecraft        string             `json:"minecraft"`
-	Plugins          map[string]string  `json:"plugins"`
-	Groups           []string           `json:"groups"`
-	TPS              *float64           `json:"tps,omitempty"`
-	MSPT             *float64           `json:"mspt,omitempty"`
-	CPU              *float64           `json:"cpu,omitempty"`
-	Players          []PlayerSnapshot   `json:"players"`
-	ReceivedAt       time.Time          `json:"receivedAt"`
-	ProtocolVersions []string           `json:"protocolVersions,omitempty"`
-	Chunky           []ChunkyWorld      `json:"chunky,omitempty"`
-	Plan             *PlanSnapshot      `json:"plan,omitempty"`
-	Towny            *TownySnapshot     `json:"towny,omitempty"`
-	Crossplay        *CrossplaySnapshot `json:"crossplay,omitempty"`
+	Platform          string                           `json:"platform"`
+	Minecraft         string                           `json:"minecraft"`
+	Plugins           map[string]string                `json:"plugins"`
+	Groups            []string                         `json:"groups"`
+	TPS               *float64                         `json:"tps,omitempty"`
+	MSPT              *float64                         `json:"mspt,omitempty"`
+	CPU               *float64                         `json:"cpu,omitempty"`
+	Players           []PlayerSnapshot                 `json:"players"`
+	ReceivedAt        time.Time                        `json:"receivedAt"`
+	ProtocolVersions  []string                         `json:"protocolVersions,omitempty"`
+	Chunky            []ChunkyWorld                    `json:"chunky,omitempty"`
+	Plan              *PlanSnapshot                    `json:"plan,omitempty"`
+	Towny             *TownySnapshot                   `json:"towny,omitempty"`
+	Crossplay         *CrossplaySnapshot               `json:"crossplay,omitempty"`
+	GarbageCollectors map[string]GarbageCollectorStats `json:"garbageCollectors,omitempty"`
+}
+type GarbageCollectorStats struct {
+	Collections *int64 `json:"collections,omitempty"`
+	TimeMs      *int64 `json:"timeMs,omitempty"`
 }
 type pairing struct {
 	Player  string
@@ -158,6 +163,16 @@ func (a *App) heartbeat(w http.ResponseWriter, r *http.Request) {
 	if len(snapshot.Players) > 2000 || len(snapshot.Plugins) > 200 || len(snapshot.Groups) > 500 || len(snapshot.ProtocolVersions) > 256 || len(snapshot.Platform) > 120 || len(snapshot.Minecraft) > 120 {
 		bad(w, errors.New("snapshot too large"))
 		return
+	}
+	if len(snapshot.GarbageCollectors) > 32 {
+		bad(w, errors.New("too many garbage collectors"))
+		return
+	}
+	for name, counters := range snapshot.GarbageCollectors {
+		if strings.TrimSpace(name) == "" || len(name) > 120 || (counters.Collections != nil && *counters.Collections < 0) || (counters.TimeMs != nil && *counters.TimeMs < 0) {
+			bad(w, errors.New("invalid garbage collector observation"))
+			return
+		}
 	}
 	if err := validateChunkySnapshot(snapshot.Chunky); err != nil {
 		bad(w, err)
