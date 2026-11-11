@@ -25,7 +25,9 @@ const binary = join(dir, process.platform === "win32" ? "isles.exe" : "isles");
 const build = spawnSync("go", ["build", "-o", binary, "./cmd/isles"], { cwd: root, env: { ...process.env, GOWORK: "off" }, stdio: "inherit" });
 if (build.status !== 0) throw new Error("Build Isles before live scenario failed");
 const service = spawn(binary, [], { env: { ...process.env, ISLES_LISTEN: `127.0.0.1:${servicePort}`, ISLES_DATA_DIR: join(dir, "data"), ISLES_ADMIN_TOKEN: admin, ISLES_SECRET_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" } });
-let game, bot, bedrock, voiceClient;
+let game, bot, bedrock, voiceClient, prometheus;
+let prometheusQuery;
+let prometheusVersion;
 const outputs = [];
 const capture = (p, name) => { for (const stream of [p.stdout, p.stderr]) stream?.on("data", (data) => { const text = data.toString(); outputs.push(`[${name}] ${text}`); if (/ERROR|Exception|Done \(/.test(text)) console.log(text); }); };
 capture(service, "isles");
@@ -96,6 +98,27 @@ try {
   capture(game, "paper");
   const heartbeat = await waitFor(async () => { if (game.exitCode !== null) throw new Error("Game server exited before heartbeat"); const result = await api("admin/servers/live/bridge"); return result.fresh && result; }, 240_000);
   assert(heartbeat.snapshot.platform);
+  if (process.env.ISLES_TEST_PROMETHEUS_DIR) {
+    const promPort = await freePort();
+    const config = join(dir, "prometheus.yml");
+    await writeFile(config, `global:\n  scrape_interval: 1s\n  scrape_timeout: 1s\nscrape_configs:\n  - job_name: isles\n    authorization:\n      type: Bearer\n      credentials: ${JSON.stringify(admin)}\n    static_configs:\n      - targets: ["127.0.0.1:${servicePort}"]\n  - job_name: isles-no-credential\n    static_configs:\n      - targets: ["127.0.0.1:${servicePort}"]\n`);
+    const binary = join(process.env.ISLES_TEST_PROMETHEUS_DIR, process.platform === "win32" ? "prometheus.exe" : "prometheus");
+    const version = spawnSync(binary, ["--version"], { encoding: "utf8", timeout: 10_000 });
+    assert.equal(version.status, 0, "Prometheus binary version check failed");
+    prometheusVersion = `${version.stdout}${version.stderr}`.split(/\r?\n/)[0];
+    prometheus = spawn(binary, [`--config.file=${config}`, `--storage.tsdb.path=${join(dir, "prometheus-data")}`, `--web.listen-address=127.0.0.1:${promPort}`, "--storage.tsdb.retention.time=1h"]);
+    capture(prometheus, "prometheus");
+    await waitFor(async () => (await fetch(`http://127.0.0.1:${promPort}/-/ready`)).ok, 30_000);
+    prometheusQuery = async (query) => {
+      const response = await fetch(`http://127.0.0.1:${promPort}/api/v1/query?${new URLSearchParams({ query })}`, { signal: AbortSignal.timeout(10_000) });
+      assert(response.ok);
+      const result = await response.json();
+      assert.equal(result.status, "success");
+      return result.data.result;
+    };
+    await waitFor(async () => (await prometheusQuery('up{job="isles"}'))[0]?.value[1] === "1", 30_000);
+    await waitFor(async () => (await prometheusQuery('up{job="isles-no-credential"}'))[0]?.value[1] === "0", 30_000);
+  }
   const pair = await api("players/website-player/pair", "POST", { server: "live" }, admin, "website-player");
   bot = await connectPlayer("IslesTester");
   bot.chat(`/mythic link ${pair.code}`);
@@ -399,7 +422,32 @@ try {
     await writeFile(join(dir, "chunky-observations.json"), JSON.stringify({ running, paused, resumed, cancelled, completed, terminalAfterRestart }, null, 2));
     chunky = "generated-paused-restarted-resumed-cancelled-running-and-paused-completed";
   }
-  const manifest = { server: heartbeat.snapshot.platform, minecraft: heartbeat.snapshot.minecraft, heartbeat: true, inGameLink: true, gameName: linked[0].identity.name, whitelist: "applied", member, placeholder, protocols, regions, economy, chunky, plan, towny, crossplay, voicechat, gc, legacyProtocols, providers: Object.keys((await api("admin/servers/live/bridge")).snapshot.plugins).sort() };
+  let prometheusAcceptance = "not-requested";
+  if (prometheusQuery) {
+    const fresh = await waitFor(async () => {
+      const samples = await prometheusQuery('mythic_isles_bridge_tps{job="isles",server="live"}');
+      return samples[0] && Number(samples[0].value[1]) > 0 && samples;
+    });
+    const collectors = await prometheusQuery('mythic_isles_bridge_gc_collections{job="isles",server="live"}');
+    assert(collectors.length > 0);
+    const withoutCredential = await prometheusQuery('up{job="isles-no-credential"}');
+    assert.equal(withoutCredential[0].value[1], "0");
+    bot?.quit(); bot = undefined;
+    bedrock?.disconnect(); bedrock = undefined;
+    game.stdin.write("stop\n");
+    await waitFor(() => game.exitCode !== null, 60_000);
+    // Exercise the production 90-second freshness boundary using actual elapsed
+    // time, not injected timestamps or a product-only clock override.
+    await waitFor(async () => (await prometheusQuery('mythic_isles_bridge_fresh{job="isles",server="live"}'))[0]?.value[1] === "0", 120_000);
+    await waitFor(async () => (await prometheusQuery('mythic_isles_bridge_tps{job="isles",server="live"}')).length === 0, 10_000);
+    assert.equal((await prometheusQuery('mythic_isles_bridge_gc_collections{job="isles",server="live"}')).length, 0);
+    const history = await prometheusQuery('max_over_time(mythic_isles_bridge_tps{job="isles",server="live"}[5m])');
+    assert(history.length === 1 && Number(history[0].value[1]) > 0, "TSDB lost earlier fresh samples");
+    assert.equal((await fetch(`${origin}/healthz`)).status, 200, "Process health should not imply game health");
+    await writeFile(join(dir, "prometheus-result.json"), JSON.stringify({ prometheusVersion, authenticatedScrape: "up=1", unauthenticatedScrape: "up=0", freshTPS: Number(fresh[0].value[1]), gcCollectors: collectors.map((sample) => sample.metric.collector).sort(), staleBridge: "fresh=0-and-performance-series-absent", tsdbHistoryTPS: Number(history[0].value[1]), processHealthAfterGameStop: 200 }, null, 2));
+    prometheusAcceptance = "real-scrape-auth-staleness-and-tsdb-history-verified";
+  }
+  const manifest = { server: heartbeat.snapshot.platform, minecraft: heartbeat.snapshot.minecraft, heartbeat: true, inGameLink: true, gameName: linked[0].identity.name, whitelist: "applied", member, placeholder, protocols, regions, economy, chunky, plan, towny, crossplay, voicechat, gc, legacyProtocols, prometheus: prometheusAcceptance, providers: Object.keys((await api("admin/servers/live/bridge")).snapshot.plugins).sort() };
   await writeFile(join(dir, "scenario-result.json"), JSON.stringify(manifest, null, 2));
   console.log(JSON.stringify(manifest));
 } finally {
@@ -412,5 +460,6 @@ try {
     if (game.exitCode === null) game.kill();
   }
   service.kill();
+  prometheus?.kill();
   await writeFile(join(dir, "process.log"), outputs.join(""));
 }

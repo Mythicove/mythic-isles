@@ -9,7 +9,7 @@ Optional self-hosted Minecraft server directory and integration service for Myth
 - Java SLP and Bedrock RakNet status, shared 20-second observations with timestamps.
 - MCSManager: discover instances, runtime, start/stop/restart, commands, bounded recent logs.
 - Pterodactyl Client API: discover servers, resource status, power and commands.
-- Prometheus exporter: selected server-level metrics through the authenticated admin API.
+- Prometheus: selected upstream exporter values through the admin API, plus private service-token `/metrics` Bridge snapshot gauges for a real Prometheus scrape.
 - packwiz 1.1 source publication to content-addressed `.mrpack`: verifies index, metadata and file hashes; preserves sides, optional environments and overrides.
 - Fixed-origin Modrinth and Hangar catalog search for self-hosted launchers and site content; no arbitrary upstream proxy.
 - Connection secrets encrypted with AES-256-GCM using a deployment key kept outside the data directory. Tokens are never returned by configuration APIs.
@@ -57,6 +57,8 @@ Set a server's `packwizUrl`, then POST `/api/isles/admin/servers/{id}/publish-pa
 Limits: 90 seconds, 256 MiB fetched per publication, 128 MiB per remote mod, 32 MiB per override, 2000 indexed entries. SHA-1/SHA-256/SHA-512/MD5 source verification is supported. Metadata-only CurseForge mode, Murmur2 and index aliases require upstream packwiz export and are explicitly rejected. Pack URLs do not carry panel credentials. Files are fetched to verify them and derive both `.mrpack` hashes; external mod binaries remain upstream downloads rather than being mirrored into the ZIP. The `.mrpack` optional environment does not preserve packwiz's default-selection UI.
 
 ## Verification
+
+Direct private `/metrics` requires the existing Isles service bearer token; a per-server Bridge token is insufficient. It includes configured server IDs (drafts included), Bridge freshness/observation timestamps, and only fresh TPS, tick duration in seconds, system CPU ratio and per-collector GC gauges. Unknown or 90-second-old performance values are omitted, not published as zero; no probes or upstream calls run on scrape. GC values use provider baseline/reset semantics, so they are gauges, not monotonic `_total` counters. There are no player names/UUIDs or plugin inventories in labels. `/healthz` is unauthenticated process health, not game/Bridge health. Keep the scraper trusted because this first delivery reuses the administrative service credential. The browser BFF does not expose `/metrics`; see `docs/deploy/prometheus/isles.yml` in the docs repository for a private scrape job.
 
 ```sh
 go test ./...

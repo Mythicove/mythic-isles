@@ -18,6 +18,7 @@ func (a *App) Handler() http.Handler {
 	a.bridgeRoutes(m)
 	a.catalogRoutes(m)
 	m.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok") })
+	m.HandleFunc("GET /metrics", a.prometheus)
 	m.HandleFunc("GET /api/isles/servers", a.listPublic)
 	m.HandleFunc("GET /api/isles/servers/{id}", func(w http.ResponseWriter, r *http.Request) {
 		s, ok := a.server(r.PathValue("id"), true)
