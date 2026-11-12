@@ -10,6 +10,7 @@ if (!destination) throw new Error("Usage: node test/fetch-plugins.mjs /absolute/
 const dir = resolve(destination);
 await mkdir(dir, { recursive: true });
 const versions = [
+  { project: "dynmap", version: "ImNNT17B", name: "Dynmap.jar" },
   { project: "simple-voice-chat", version: "5OqsnSs7", name: "voicechat.jar" },
   { project: "geyser", version: "nYyvuBsj", name: "Geyser-Spigot.jar" },
   { project: "towny", version: "pra46LOM", name: "Towny.jar" },

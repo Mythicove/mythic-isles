@@ -19,6 +19,7 @@ const freePort = () => new Promise((resolve, reject) => { const s = createServer
 const servicePort = await freePort();
 const gamePort = await freePort();
 const bedrockPort = await freePort();
+const mapPort = await freePort();
 const origin = `http://127.0.0.1:${servicePort}`;
 const admin = "live-scenario-service-token-32-characters";
 const metricsToken = "live-scenario-metrics-token-32-characters";
@@ -76,6 +77,13 @@ try {
   await writeFile(join(work, "eula.txt"), "eula=true\n");
   await writeFile(join(work, "server.properties"), `server-ip=127.0.0.1\nserver-port=${gamePort}\nonline-mode=false\nenforce-secure-profile=false\nspawn-protection=0\nview-distance=2\nsimulation-distance=2\ngenerate-structures=false\nspawn-monsters=false\nspawn-animals=false\nspawn-npcs=false\nmax-players=5\n`);
   await writeFile(join(work, "plugins", "MythicIsles", "config.yml"), `url: '${origin}'\nserver: live\ntoken: '${secret.token}'\nplaceholders:\n  server_name: '%server_name%'\n`);
+  const mapInstalled = (await readdir(join(work, "plugins"))).includes("Dynmap-WorldGuard.jar");
+  if (mapInstalled) {
+    await mkdir(join(work, "plugins", "dynmap"), { recursive: true });
+    await writeFile(join(work, "plugins", "dynmap", "configuration.txt"), `webserver-bindaddress: 127.0.0.1\nwebserver-port: ${mapPort}\ndisable-webserver: false\n`);
+    await mkdir(join(work, "plugins", "Dynmap-WorldGuard"), { recursive: true });
+    await copyFile(new URL("fixtures/dynmap-worldguard.yml", import.meta.url), join(work, "plugins", "Dynmap-WorldGuard", "config.yml"));
+  }
   if (process.env.ISLES_TEST_DISABLE_SPARK === "1") {
     await mkdir(join(work, "config"), { recursive: true });
     await writeFile(join(work, "config", "paper-global.yml"), "_version: 29\nspark:\n  enabled: false\n");
@@ -270,6 +278,7 @@ try {
     protocols = "server-and-player-observed";
   }
   let regions = "not-installed";
+  let mapRegions = "not-installed";
   if (currentProviders.WorldGuard) {
     game.stdin.write(`rg define -w world -g isles_test\n`);
     await pause(1000);
@@ -288,6 +297,49 @@ try {
     await waitFor(async () => { const profile = (await api("players/website-player/links", "GET", undefined, admin, "website-player"))[0]?.player; return profile?.regions?.some((r) => r.id === "isles_plot" && r.world === "world" && r.centerX === 5 && r.role === "member") && !profile.regions.some((r) => r.id === "isles_test"); });
     game.stdin.write("deop IslesTester\n");
     regions = "membership-and-location-observed";
+  }
+  if (mapInstalled) {
+    assert(currentProviders.WorldGuard, "Map scenario requires WorldGuard");
+    const mapOrigin = `http://127.0.0.1:${mapPort}`;
+    const markers = async () => {
+      const response = await fetch(`${mapOrigin}/tiles/_markers_/marker_world.json`, { signal: AbortSignal.timeout(10_000) });
+      assert(response.ok);
+      return response.json();
+    };
+    const area = (data) => data.sets?.["worldguard.markerset"]?.areas?.["world_isles_plot"];
+    const created = await waitFor(async () => { const data = await markers(); return area(data) && data; });
+    assert.equal(area(created).label, "Isles_plot");
+    // WorldGuard's inclusive block maximum is the outline's exclusive edge.
+    assert.deepEqual([...area(created).x].sort((a, b) => a - b), [0, 0, 11, 11]);
+    assert.deepEqual([...area(created).z].sort((a, b) => a - b), [0, 0, 11, 11]);
+    assert(!JSON.stringify(created).includes(linked[0].identity.uuid), "Public popup leaked membership UUID");
+    assert(!JSON.stringify(created).includes(linked[0].identity.name), "Public popup leaked member name");
+    assert(!JSON.stringify(created).includes("isles_test"), "Unselected global region was published");
+    game.stdin.write("op IslesTester\n");
+    await pause(1000);
+    bot.chat("//pos1 20,60,20");
+    await pause(1000);
+    bot.chat("//pos2 30,80,30");
+    await pause(1000);
+    bot.chat("/rg define private_plot");
+    await pause(1000);
+    bot.chat("//pos1 0,60,0");
+    await pause(1000);
+    bot.chat("//pos2 15,80,15");
+    await pause(1000);
+    bot.chat("/rg redefine isles_plot");
+    const updated = await waitFor(async () => { const data = await markers(); return area(data)?.x?.includes(16) && data; });
+    assert.deepEqual([...area(updated).z].sort((a, b) => a - b), [0, 0, 16, 16]);
+    assert(!JSON.stringify(updated).includes("private_plot"), "Unselected physical region was published");
+    assert(!JSON.stringify(updated).includes(linked[0].identity.uuid));
+    assert(!JSON.stringify(updated).includes(linked[0].identity.name));
+    const page = await fetch(`${mapOrigin}/`, { signal: AbortSignal.timeout(10_000) });
+    assert(page.ok && (await page.text()).includes("dynmap"), "Dynmap map page unavailable");
+    game.stdin.write("rg remove -w world isles_plot\n");
+    const deleted = await waitFor(async () => { const data = await markers(); return !area(data) && data; });
+    game.stdin.write("deop IslesTester\n");
+    await writeFile(join(dir, "map-observations.json"), JSON.stringify({ created, updated, deleted }, null, 2));
+    mapRegions = "selected-boundary-created-updated-deleted-private-region-and-membership-excluded";
   }
   let economy = "not-installed";
   if (currentProviders.Vault) {
@@ -487,7 +539,7 @@ try {
     await writeFile(join(dir, "prometheus-result.json"), JSON.stringify({ prometheusVersion, authenticatedScrape: "up=1", unauthenticatedScrape: "up=0", freshTPS: Number(fresh[0].value[1]), gcCollectors: collectors.map((sample) => sample.metric.collector).sort(), staleBridge: "fresh=0-and-performance-series-absent", tsdbHistoryTPS: Number(history[0].value[1]), processHealthAfterGameStop: 200 }, null, 2));
     prometheusAcceptance = "real-scrape-auth-staleness-and-tsdb-history-verified";
   }
-  const manifest = { server: heartbeat.snapshot.platform, minecraft: heartbeat.snapshot.minecraft, heartbeat: true, inGameLink: true, gameName: linked[0].identity.name, whitelist: "applied", member, placeholder, protocols, regions, economy, chunky, plan, towny, crossplay, voicechat, gc, legacyProtocols, prometheus: prometheusAcceptance, providers: Object.keys((await api("admin/servers/live/bridge")).snapshot.plugins).sort() };
+  const manifest = { server: heartbeat.snapshot.platform, minecraft: heartbeat.snapshot.minecraft, heartbeat: true, inGameLink: true, gameName: linked[0].identity.name, whitelist: "applied", member, placeholder, protocols, regions, mapRegions, economy, chunky, plan, towny, crossplay, voicechat, gc, legacyProtocols, prometheus: prometheusAcceptance, providers: Object.keys((await api("admin/servers/live/bridge")).snapshot.plugins).sort() };
   await writeFile(join(dir, "scenario-result.json"), JSON.stringify(manifest, null, 2));
   console.log(JSON.stringify(manifest));
 } finally {
