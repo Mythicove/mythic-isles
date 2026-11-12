@@ -47,6 +47,7 @@ public final class IslesBridge extends JavaPlugin {
     private GeyserHook geyser;
     private FloodgateHook floodgate;
     private VoicechatHook voicechat;
+    private CoreProtectHook coreProtect;
 
     @Override public void onEnable() {
         saveDefaultConfig();
@@ -73,6 +74,7 @@ public final class IslesBridge extends JavaPlugin {
         if (enabled("Geyser-Spigot")) geyser = new GeyserHook();
         if (enabled("floodgate")) floodgate = new FloodgateHook();
         if (enabled("voicechat")) voicechat = new VoicechatHook();
+        if (enabled("CoreProtect")) coreProtect = new CoreProtectHook();
         Bukkit.getScheduler().runTaskTimer(this, this::observe, 20L, 400L);
         getLogger().info("Bridge enabled. Optional data providers are detected from installed plugins.");
     }
@@ -96,7 +98,7 @@ public final class IslesBridge extends JavaPlugin {
             snapshot.put("platform", Bukkit.getName());
             snapshot.put("minecraft", Bukkit.getBukkitVersion());
             Map<String, String> plugins = new LinkedHashMap<>();
-            for (String name : List.of("LuckPerms", "PlaceholderAPI", "spark", "ViaVersion", "ViaBackwards", "ViaRewind", "WorldGuard", "Vault", "Chunky", "Plan", "Towny", "Geyser-Spigot", "floodgate", "voicechat")) {
+            for (String name : List.of("LuckPerms", "PlaceholderAPI", "spark", "ViaVersion", "ViaBackwards", "ViaRewind", "WorldGuard", "Vault", "Chunky", "Plan", "Towny", "Geyser-Spigot", "floodgate", "voicechat", "CoreProtect")) {
                 var plugin = Bukkit.getPluginManager().getPlugin(name);
                 if (plugin != null && plugin.isEnabled()) plugins.put(name, plugin.getDescription().getVersion());
             }
@@ -203,6 +205,21 @@ public final class IslesBridge extends JavaPlugin {
 
     private void executeTask(JsonObject task) throws Exception {
         String id = task.get("id").getAsString();
+        if (task.get("kind").getAsString().equals("coreprotect")) {
+            Map<String, Object> response = new LinkedHashMap<>();
+            try {
+                if (coreProtect == null) throw new IllegalStateException("CoreProtect unavailable");
+                var query = task.getAsJsonObject("coreprotect");
+                var block = Bukkit.getScheduler().callSyncMethod(this, () -> coreProtect.block(query)).get(10, java.util.concurrent.TimeUnit.SECONDS);
+                response.put("coreprotectResult", coreProtect.lookup(block, query));
+                response.put("success", true);
+            } catch (Exception e) {
+                response.put("success", false);
+                response.put("error", "CoreProtect lookup failed: " + e.getClass().getSimpleName());
+            }
+            send("tasks/" + id, "POST", json.toJson(response));
+            return;
+        }
         if (task.get("kind").getAsString().equals("chunky")) {
             // Claim is durably persisted by Isles before any provider call. A
             // lost claim/result response leaves dispatched, never auto-replayed.

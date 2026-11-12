@@ -77,15 +77,17 @@ type pairing struct {
 	Expires time.Time
 }
 type BridgeTask struct {
-	ID        string           `json:"id"`
-	Kind      string           `json:"kind"`
-	UUID      string           `json:"uuid"`
-	Group     string           `json:"group,omitempty"`
-	Grant     bool             `json:"grant"`
-	Status    string           `json:"status"`
-	Error     string           `json:"error,omitempty"`
-	CreatedAt time.Time        `json:"createdAt"`
-	Chunky    *ChunkyOperation `json:"chunky,omitempty"`
+	ID                string             `json:"id"`
+	Kind              string             `json:"kind"`
+	UUID              string             `json:"uuid"`
+	Group             string             `json:"group,omitempty"`
+	Grant             bool               `json:"grant"`
+	Status            string             `json:"status"`
+	Error             string             `json:"error,omitempty"`
+	CreatedAt         time.Time          `json:"createdAt"`
+	Chunky            *ChunkyOperation   `json:"chunky,omitempty"`
+	CoreProtect       *CoreProtectQuery  `json:"coreprotect,omitempty"`
+	CoreProtectResult *CoreProtectResult `json:"coreprotectResult,omitempty"`
 }
 
 func randomID() string { b := make([]byte, 16); _, _ = rand.Read(b); return hex.EncodeToString(b) }
@@ -476,8 +478,9 @@ func (a *App) gameIdentities(w http.ResponseWriter, r *http.Request) {
 }
 func (a *App) finishTask(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Success bool   `json:"success"`
-		Error   string `json:"error"`
+		Success           bool               `json:"success"`
+		Error             string             `json:"error"`
+		CoreProtectResult *CoreProtectResult `json:"coreprotectResult,omitempty"`
 	}
 	if err := decode(r, &input); err != nil {
 		bad(w, err)
@@ -504,6 +507,16 @@ func (a *App) finishTask(w http.ResponseWriter, r *http.Request) {
 	}
 	if tasks[i].Status != "pending" && tasks[i].Status != "dispatched" {
 		w.WriteHeader(204)
+		return
+	}
+	if tasks[i].Kind == "coreprotect" && input.Success {
+		if err := validateCoreProtectResult(tasks[i].CoreProtect, input.CoreProtectResult); err != nil {
+			bad(w, err)
+			return
+		}
+		tasks[i].CoreProtectResult = input.CoreProtectResult
+	} else if input.CoreProtectResult != nil {
+		bad(w, errors.New("unexpected CoreProtect result"))
 		return
 	}
 	tasks[i].Status = "failed"

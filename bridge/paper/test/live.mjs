@@ -99,6 +99,7 @@ try {
   capture(game, "paper");
   const heartbeat = await waitFor(async () => { if (game.exitCode !== null) throw new Error("Game server exited before heartbeat"); const result = await api("admin/servers/live/bridge"); return result.fresh && result; }, 240_000);
   assert(heartbeat.snapshot.platform);
+  if ((await readdir(join(work, "plugins"))).includes("CoreProtect.jar")) assert(heartbeat.snapshot.plugins.CoreProtect, "Installed CoreProtect fixture failed to enable");
   if (process.env.ISLES_TEST_PROMETHEUS_DIR) {
     const promPort = await freePort();
     const config = join(dir, "prometheus.yml");
@@ -125,6 +126,42 @@ try {
   const pair = await api("players/website-player/pair", "POST", { server: "live" }, admin, "website-player");
   bot = await connectPlayer("IslesTester");
   bot.chat(`/mythic link ${pair.code}`);
+  if (heartbeat.snapshot.plugins.CoreProtect) {
+    bot.physicsEnabled = false;
+    game.stdin.write("gamemode creative IslesTester\nfill -3 100 -3 3 100 3 minecraft:stone\ntp IslesTester 0.5 101 2.5\ngive IslesTester minecraft:stone 64\n");
+    await pause(2500);
+    console.log(`CoreProtect native player position: ${bot.entity.position}`);
+    const stone = bot.inventory.items().find((item) => item.name === "stone");
+    assert(stone, "Native player did not receive stone");
+    await bot.equip(stone, "hand");
+    const coordinate = bot.entity.position.clone().set(0, 101, 0);
+    const support = bot.blockAt(coordinate.offset(0, -1, 0));
+    await bot.placeBlock(support, coordinate.clone().set(0, 1, 0));
+    await waitFor(() => bot.blockAt(coordinate)?.name === "stone", 10_000);
+    await bot.dig(bot.blockAt(coordinate));
+    await pause(5000);
+    const query = { world: "world", x: 0, y: 101, z: 0, seconds: 3600, offset: 0 };
+    const lookup = async (input) => {
+      const task = await api("admin/servers/live/coreprotect", "POST", input);
+      return waitFor(async () => {
+        const item = (await api("admin/servers/live/tasks")).find((t) => t.id === task.id);
+        if (item?.status === "failed") throw new Error(`CoreProtect task failed: ${item.error}`);
+        return item?.status === "applied" && item.coreprotectResult;
+      }, 60_000);
+    };
+    const result = await lookup(query);
+    assert(result.records.some((r) => r.player === "IslesTester" && r.action === "place" && r.material === "minecraft:stone"));
+    assert(result.records.some((r) => r.player === "IslesTester" && r.action === "break" && r.material === "minecraft:stone"));
+    assert(result.records.every((r) => r.timestampMs > Date.now() - 3600_000));
+    assert.equal(bot.blockAt(coordinate).name, "air", "Read-only lookup changed world state");
+    const empty = await lookup({ ...query, x: 100 });
+    assert.deepEqual(empty, { records: [], hasMore: false });
+    const page = await lookup({ ...query, offset: 1 });
+    assert.deepEqual(page.records, result.records.slice(1));
+    await writeFile(join(dir, "coreprotect-observation.json"), JSON.stringify({ version: heartbeat.snapshot.plugins.CoreProtect, query, result, page, empty }, null, 2));
+    console.log("CoreProtect real placement/removal, exact coordinate, empty result and offset verified");
+    bot.physicsEnabled = true;
+  }
   const linked = await waitFor(async () => { const items = await api("players/website-player/links", "GET", undefined, admin, "website-player"); return items.length && items; });
   assert.equal(linked[0].identity.name, "IslesTester");
   const task = await api("admin/servers/live/tasks", "POST", { player: "website-player", kind: "whitelist", grant: true });

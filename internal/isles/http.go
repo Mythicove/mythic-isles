@@ -91,6 +91,7 @@ func (a *App) adminMux() *http.ServeMux {
 	m.HandleFunc("GET /api/isles/admin/servers/{id}/tasks", a.listTasks)
 	m.HandleFunc("POST /api/isles/admin/servers/{id}/tasks", a.enqueueTask)
 	m.HandleFunc("POST /api/isles/admin/servers/{id}/chunky", a.enqueueChunky)
+	m.HandleFunc("POST /api/isles/admin/servers/{id}/coreprotect", a.enqueueCoreProtect)
 	m.HandleFunc("GET /api/isles/admin/servers/{id}/identities", a.gameIdentities)
 	return m
 }
