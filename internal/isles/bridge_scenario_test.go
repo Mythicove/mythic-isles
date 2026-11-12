@@ -89,6 +89,20 @@ func TestVerifiedIdentityAndMemberTaskScenario(t *testing.T) {
 	snapshot["garbageCollectors"] = collectors
 	status, b = call("POST", "/api/isles/bridge/survival/heartbeat", bridgeToken, "", snapshot)
 	mustStatus(t, 204, status, b)
+	status, b = call("GET", "/api/isles/servers/survival/status", "", "", nil)
+	mustStatus(t, 200, status, b)
+	var publicStatus map[string]any
+	if err := json.Unmarshal(b, &publicStatus); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(b, []byte(`"protocolVersions":["1.21.1"]`)) {
+		t.Fatalf("public protocol hint missing: %s", b)
+	}
+	for _, private := range []string{"Alice", identity["uuid"], "PrivateHarbor", "balance", "LuckPerms", "garbageCollectors"} {
+		if bytes.Contains(b, []byte(private)) {
+			t.Fatalf("private Bridge observation in public status: %s", b)
+		}
+	}
 	status, b = call("GET", "/api/isles/players/site-player/links", token, "site-player", nil)
 	mustStatus(t, 200, status, b)
 	var links []struct {

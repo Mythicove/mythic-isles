@@ -14,14 +14,15 @@ import (
 )
 
 type Status struct {
-	Reachable  bool      `json:"reachable"`
-	CheckedAt  time.Time `json:"checkedAt"`
-	Players    *int      `json:"players,omitempty"`
-	MaxPlayers *int      `json:"maxPlayers,omitempty"`
-	Version    string    `json:"version,omitempty"`
-	MOTD       string    `json:"motd,omitempty"`
-	LatencyMS  int64     `json:"latencyMs"`
-	Error      string    `json:"error,omitempty"`
+	Reachable        bool      `json:"reachable"`
+	CheckedAt        time.Time `json:"checkedAt"`
+	Players          *int      `json:"players,omitempty"`
+	MaxPlayers       *int      `json:"maxPlayers,omitempty"`
+	Version          string    `json:"version,omitempty"`
+	MOTD             string    `json:"motd,omitempty"`
+	LatencyMS        int64     `json:"latencyMs"`
+	Error            string    `json:"error,omitempty"`
+	ProtocolVersions []string  `json:"protocolVersions,omitempty"`
 }
 
 type probeEntry struct {

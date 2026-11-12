@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 )
 
 func (a *App) Handler() http.Handler {
@@ -34,7 +35,14 @@ func (a *App) Handler() http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-		reply(w, a.probe(r.Context(), s))
+		status := a.probe(r.Context(), s)
+		// Project only public protocol names, independently of the cached network probe.
+		a.mu.Lock()
+		if snapshot, ok := a.bridges[s.ID]; ok && time.Since(snapshot.ReceivedAt) < 90*time.Second {
+			status.ProtocolVersions = slices.Clone(snapshot.ProtocolVersions)
+		}
+		a.mu.Unlock()
+		reply(w, status)
 	})
 	m.HandleFunc("GET /api/isles/packs/{version}", a.downloadPack)
 	m.HandleFunc("/api/isles/admin/", func(w http.ResponseWriter, r *http.Request) {
