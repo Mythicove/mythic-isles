@@ -23,6 +23,9 @@ jobs:
           cache: maven
       - run: mvn --batch-mode --no-transfer-progress package
         working-directory: bridge/paper
+      - name: build native identity acceptance observer
+        run: mvn --batch-mode --no-transfer-progress package
+        working-directory: bridge/paper/test/identity-observer
       - uses: actions/upload-artifact@v4
         with:
           name: isles-paper-bridge

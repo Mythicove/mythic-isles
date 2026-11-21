@@ -1,0 +1,4 @@
+name: IdentityObserver
+version: 1.0.0
+main: org.mythicove.test.IdentityObserver
+api-version: '1.21'

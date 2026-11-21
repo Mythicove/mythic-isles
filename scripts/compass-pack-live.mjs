@@ -1,9 +1,9 @@
 // Cross-product acceptance: real Isles publication -> untouched .mrpack download
 // -> Compass production import/launch core with real Mirror authentication.
-// Requires Rust, Go, network and desktop/OpenGL. Pack source is a loopback fixture.
+// Requires Rust, Go, JDK 21/Maven, PAPER_SERVER_JAR and desktop/OpenGL.
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtemp, writeFile, readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, copyFile, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,6 +13,7 @@ import assert from "node:assert/strict";
 const compass = process.argv[2];
 const mirror = process.argv[3];
 if (!compass || !mirror) throw new Error("Usage: node scripts/compass-pack-live.mjs /absolute/compass-root /absolute/mirror-root");
+assert(process.env.PAPER_SERVER_JAR, "Set PAPER_SERVER_JAR to a Paper-compatible Minecraft 1.21.1 server JAR");
 const root = fileURLToPath(new URL("../", import.meta.url));
 const run = await mkdtemp(join(tmpdir(), "isles-compass-pack-"));
 console.log(`Scenario directory: ${run}`);
@@ -95,6 +96,27 @@ try {
   for (const [username, password] of [[player, masterPassword], [email, launcherPassword]]) {
     assert.equal((await identity("/authserver/authenticate", { username, password })).status, 403, "launcher accepted site credentials");
   }
+  const skin = await readFile(join(resolve(mirror), "internal/texture/builtin/slim/ari.png"));
+  assert.equal((await fetch(`${mirrorOrigin}/skin/${player}?model=slim`, { method: "POST", headers: { Authorization: `Bearer ${siteToken}`, "Content-Type": "image/png" }, body: skin })).status, 204);
+  const skinResponse = await fetch(`${mirrorOrigin}/skin/${player}`);
+  assert.equal(skinResponse.status, 200);
+  const skinDigest = hash(Buffer.from(await skinResponse.arrayBuffer()));
+  const gameAddress = createServer();
+  await new Promise((done) => gameAddress.listen(0, "127.0.0.1", done));
+  const gamePort = gameAddress.address().port;
+  await new Promise((done) => gameAddress.close(done));
+  const serverWork = join(run, "game-server");
+  await mkdir(join(serverWork, "plugins"), { recursive: true });
+  await copyFile(resolve(process.env.PAPER_SERVER_JAR), join(serverWork, "server.jar"));
+  const observer = join(root, "bridge/paper/test/identity-observer");
+  const maven = process.env.MAVEN_COMMAND || (process.platform === "win32" ? "mvn.cmd" : "mvn");
+  const observerBuild = process.platform === "win32"
+    ? spawnSync("cmd.exe", ["/d", "/s", "/c", `""${maven}" --batch-mode --no-transfer-progress package"`], { cwd: observer, stdio: "inherit", windowsVerbatimArguments: true })
+    : spawnSync(maven, ["--batch-mode", "--no-transfer-progress", "package"], { cwd: observer, stdio: "inherit" });
+  assert.equal(observerBuild.status, 0, "identity observer build failed");
+  await copyFile(join(observer, "target/identity-observer-1.0.0.jar"), join(serverWork, "plugins/IdentityObserver.jar"));
+  await writeFile(join(serverWork, "eula.txt"), "eula=true\n");
+  await writeFile(join(serverWork, "server.properties"), `server-ip=127.0.0.1\nserver-port=${gamePort}\nonline-mode=true\nenforce-secure-profile=false\nview-distance=2\nsimulation-distance=2\nspawn-protection=0\nlevel-type=minecraft:flat\ngenerate-structures=false\nmax-players=2\n`);
   // Fixed publisher version; pin both identity and digest independently of the
   // loopback packwiz source. The real installer downloads this official URL.
   const response = await fetch("https://api.modrinth.com/v2/version/5SwzqWUu", { signal: AbortSignal.timeout(30_000) });
@@ -119,7 +141,7 @@ try {
     assert(Date.now() < deadline && service.exitCode === null, "Isles startup failed");
     await new Promise((done) => setTimeout(done, 100));
   }
-  await api("admin/servers/community", "PUT", { name: "Isles Compass acceptance", edition: "java", address: "127.0.0.1:25565", published: true, packwizUrl: fixtureOrigin + "/pack.toml", links: [] });
+  await api("admin/servers/community", "PUT", { name: "Isles Compass acceptance", edition: "java", address: `127.0.0.1:${gamePort}`, published: true, packwizUrl: fixtureOrigin + "/pack.toml", links: [] });
   const published = await api("admin/servers/community/publish-pack", "POST", {});
   const publicServer = await api("servers/community");
   assert.equal(publicServer.packVersion, published.version);
@@ -130,7 +152,7 @@ try {
   const pack = join(run, "community.mrpack");
   await writeFile(pack, bytes);
   console.log(`Published ${bytes.length} byte pack; starting native Compass acceptance`);
-  const cargo = spawn("cargo", ["test", "--locked", "--manifest-path", join(resolve(compass), "src-tauri", "Cargo.toml"), "--test", "isles_pack_live", "--", "--ignored", "--nocapture"], { cwd: resolve(compass), env: { ...process.env, COMPASS_ISLES_PACK: pack, COMPASS_ISLES_RUN: run, COMPASS_ISLES_ORIGIN: fixtureOrigin, COMPASS_MIRROR_ORIGIN: mirrorOrigin, COMPASS_MIRROR_PLAYER: player, COMPASS_MIRROR_PASSWORD: launcherPassword } });
+  const cargo = spawn("cargo", ["test", "--locked", "--manifest-path", join(resolve(compass), "src-tauri", "Cargo.toml"), "--test", "isles_pack_live", "--", "--ignored", "--nocapture"], { cwd: resolve(compass), env: { ...process.env, COMPASS_ISLES_PACK: pack, COMPASS_ISLES_RUN: run, COMPASS_ISLES_ORIGIN: fixtureOrigin, COMPASS_MIRROR_ORIGIN: mirrorOrigin, COMPASS_MIRROR_PLAYER: player, COMPASS_MIRROR_PASSWORD: launcherPassword, COMPASS_GAME_PORT: String(gamePort), COMPASS_SKIN_SHA256: skinDigest } });
   let cargoLogs = "";
   for (const stream of [cargo.stdout, cargo.stderr]) stream.on("data", (chunk) => { cargoLogs += chunk; process.stdout.write(chunk); });
   const exit = await new Promise((done, reject) => { cargo.on("error", reject); cargo.on("exit", done); });
