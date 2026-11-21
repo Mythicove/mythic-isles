@@ -1,33 +1,29 @@
 // Cross-product acceptance: real Isles publication -> untouched .mrpack download
-// -> Compass production import/launch core. Requires Java 21, Rust, Go, network
-// and a desktop/OpenGL session. External pack source uses only loopback fixtures.
+// -> Compass production import/launch core with real Mirror authentication.
+// Requires Rust, Go, network and desktop/OpenGL. Pack source is a loopback fixture.
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdtemp, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createHash, generateKeyPairSync } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import assert from "node:assert/strict";
 
 const compass = process.argv[2];
-if (!compass) throw new Error("Usage: node scripts/compass-pack-live.mjs /absolute/compass-root");
+const mirror = process.argv[3];
+if (!compass || !mirror) throw new Error("Usage: node scripts/compass-pack-live.mjs /absolute/compass-root /absolute/mirror-root");
 const root = fileURLToPath(new URL("../", import.meta.url));
 const run = await mkdtemp(join(tmpdir(), "isles-compass-pack-"));
 console.log(`Scenario directory: ${run}`);
 const hash = (data) => createHash("sha256").update(data).digest("hex");
 const sources = new Map();
 const reads = [];
-const { publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048, publicKeyEncoding: { type: "spki", format: "pem" }, privateKeyEncoding: { type: "pkcs8", format: "pem" } });
 const fixture = createServer((req, res) => {
   reads.push(req.url);
   if (req.url === "/fixture/corrupt-optional" && req.method === "POST") {
     sources.set("/optional.txt", "optional client fail\n");
     return res.end("{}");
-  }
-  if (req.url === "/") {
-    res.setHeader("Content-Type", "application/json");
-    return res.end(JSON.stringify({ meta: { serverName: "Isles acceptance", implementationName: "protocol-fixture", implementationVersion: "1" }, skinDomains: [], signaturePublickey: publicKey }));
   }
   const file = sources.get(req.url);
   if (file === undefined) { res.statusCode = 404; return res.end(); }
@@ -52,7 +48,53 @@ async function api(path, method = "GET", data) {
   assert(res.ok, `${path}: ${res.status} ${await res.clone().text()}`);
   return res.json();
 }
+let mirrorService;
+let mirrorLogs = "";
 try {
+  const mirrorBinary = join(run, process.platform === "win32" ? "mirror.exe" : "mirror");
+  const builtMirror = spawnSync("go", ["build", "-o", mirrorBinary, "./cmd/server"], { cwd: resolve(mirror), env: { ...process.env, GOWORK: "off" }, stdio: "inherit" });
+  assert.equal(builtMirror.status, 0, "Mirror build failed");
+  const reserved = createServer();
+  await new Promise((done) => reserved.listen(0, "127.0.0.1", done));
+  const mirrorPort = reserved.address().port;
+  await new Promise((done) => reserved.close(done));
+  const mirrorOrigin = `http://127.0.0.1:${mirrorPort}`;
+  // Exclude inherited service settings so this run cannot use an existing database.
+  const mirrorEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("MIRROR_")));
+  mirrorService = spawn(mirrorBinary, [], { env: { ...mirrorEnv, MIRROR_LISTEN_ADDR: `127.0.0.1:${mirrorPort}`, MIRROR_BASE_URL: mirrorOrigin, MIRROR_WEB_URL: mirrorOrigin, MIRROR_KEY_PATH: join(run, "mirror-key.pem"), MIRROR_TEXTURES_DIR: join(run, "mirror-textures"), MIRROR_MAIL_DRIVER: "log" } });
+  for (const stream of [mirrorService.stdout, mirrorService.stderr]) stream.on("data", (chunk) => { mirrorLogs += chunk; });
+  const mirrorDeadline = Date.now() + 30_000;
+  for (;;) {
+    try { if ((await fetch(mirrorOrigin + "/healthz")).ok) break; } catch { /* wait for startup */ }
+    assert(Date.now() < mirrorDeadline && mirrorService.exitCode === null, "Mirror startup failed");
+    await new Promise((done) => setTimeout(done, 100));
+  }
+  const email = "compass-live@example.com";
+  const player = "CompassLive";
+  const masterPassword = randomBytes(24).toString("hex");
+  const launcherPassword = randomBytes(24).toString("hex");
+  async function identity(path, data, bearer, method = "POST") {
+    return fetch(mirrorOrigin + path, { method, headers: { "Content-Type": "application/json", ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}) }, body: JSON.stringify(data), signal: AbortSignal.timeout(30_000) });
+  }
+  assert.equal((await identity("/account/register", { email, password: masterPassword, nickname: "Compass acceptance", playerName: player })).status, 201);
+  assert.equal((await identity("/account/login", { email, password: masterPassword })).status, 403, "unverified account signed in");
+  const mailDeadline = Date.now() + 10_000;
+  while (!mirrorLogs.match(/\/account\/verify\?token=([a-f0-9]+)/)) {
+    assert(Date.now() < mailDeadline, "verification mail missing");
+    await new Promise((done) => setTimeout(done, 100));
+  }
+  const verificationToken = mirrorLogs.match(/\/account\/verify\?token=([a-f0-9]+)/)[1];
+  assert.equal((await identity("/account/verify", { token: verificationToken })).status, 204);
+  const siteLogin = await identity("/account/login", { email, password: masterPassword });
+  assert.equal(siteLogin.status, 200);
+  const siteToken = (await siteLogin.json()).accessToken;
+  const credential = await identity(`/account/players/${player}/credentials`, { name: "Compass live", password: launcherPassword }, siteToken);
+  assert.equal(credential.status, 201);
+  const credentialId = (await credential.json()).id;
+  assert(credentialId);
+  for (const [username, password] of [[player, masterPassword], [email, launcherPassword]]) {
+    assert.equal((await identity("/authserver/authenticate", { username, password })).status, 403, "launcher accepted site credentials");
+  }
   // Fixed publisher version; pin both identity and digest independently of the
   // loopback packwiz source. The real installer downloads this official URL.
   const response = await fetch("https://api.modrinth.com/v2/version/5SwzqWUu", { signal: AbortSignal.timeout(30_000) });
@@ -88,20 +130,29 @@ try {
   const pack = join(run, "community.mrpack");
   await writeFile(pack, bytes);
   console.log(`Published ${bytes.length} byte pack; starting native Compass acceptance`);
-  const cargo = spawn("cargo", ["test", "--locked", "--manifest-path", join(resolve(compass), "src-tauri", "Cargo.toml"), "--test", "isles_pack_live", "--", "--ignored", "--nocapture"], { cwd: resolve(compass), env: { ...process.env, COMPASS_ISLES_PACK: pack, COMPASS_ISLES_RUN: run, COMPASS_ISLES_ORIGIN: fixtureOrigin } });
+  const cargo = spawn("cargo", ["test", "--locked", "--manifest-path", join(resolve(compass), "src-tauri", "Cargo.toml"), "--test", "isles_pack_live", "--", "--ignored", "--nocapture"], { cwd: resolve(compass), env: { ...process.env, COMPASS_ISLES_PACK: pack, COMPASS_ISLES_RUN: run, COMPASS_ISLES_ORIGIN: fixtureOrigin, COMPASS_MIRROR_ORIGIN: mirrorOrigin, COMPASS_MIRROR_PLAYER: player, COMPASS_MIRROR_PASSWORD: launcherPassword } });
   let cargoLogs = "";
   for (const stream of [cargo.stdout, cargo.stderr]) stream.on("data", (chunk) => { cargoLogs += chunk; process.stdout.write(chunk); });
   const exit = await new Promise((done, reject) => { cargo.on("error", reject); cargo.on("exit", done); });
   await writeFile(join(run, "compass-test.log"), cargoLogs);
   assert.equal(exit, 0, "Compass install/launch acceptance failed");
   const imported = JSON.parse(await readFile(join(run, "compass-result.json"), "utf8"));
+  const beforeRevoke = await identity("/authserver/authenticate", { username: player, password: launcherPassword });
+  assert.equal(beforeRevoke.status, 200);
+  const activeSession = await beforeRevoke.json();
+  const validation = { accessToken: activeSession.accessToken, clientToken: activeSession.clientToken };
+  assert.equal((await identity("/authserver/validate", validation)).status, 204);
+  assert.equal((await identity(`/account/players/${player}/credentials/${credentialId}`, {}, siteToken, "DELETE")).status, 204);
+  assert.equal((await identity("/authserver/validate", validation)).status, 403, "revoked credential left its session valid");
+  assert.equal((await identity("/authserver/authenticate", { username: player, password: launcherPassword })).status, 403, "revoked password accepted");
   assert(reads.filter((path) => path === "/optional.txt").length >= 3, "optional file was not fetched at publication, installation and corrupt-file verification");
   assert.equal(reads.filter((path) => path === "/server.txt").length, 1, "client fetched server-only bytes");
-  const manifest = { publication: "real-isles-packwiz", contentAddressVerified: true, artifactBytes: bytes.length, ...imported };
+  const manifest = { publication: "real-isles-packwiz", contentAddressVerified: true, artifactBytes: bytes.length, registration: "verified-through-development-mail-log", masterPasswordAtLauncher: "refused", emailAtLauncher: "refused", revokedCredential: "refused", revokedCredentialSession: "invalidated", mirrorStorage: "isolated-in-memory", ...imported };
   await writeFile(join(run, "scenario-result.json"), JSON.stringify(manifest, null, 2));
   console.log(JSON.stringify(manifest));
 } finally {
   service.kill();
+  mirrorService?.kill();
   fixture.close();
   await writeFile(join(run, "isles-process.log"), logs);
 }
