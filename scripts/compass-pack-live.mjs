@@ -159,6 +159,19 @@ try {
   await writeFile(join(run, "compass-test.log"), cargoLogs);
   assert.equal(exit, 0, "Compass install/launch acceptance failed");
   const imported = JSON.parse(await readFile(join(run, "compass-result.json"), "utf8"));
+  // An explicitly supplied native executable adds real desktop actions after the
+  // same core scenario. The companion uses the workspace's existing Playwright.
+  let desktop;
+  if (process.env.COMPASS_EXE) {
+    const native = spawn(process.execPath, [join(root, "../web/e2e/compass-desktop-live.mjs")], { env: {
+      ...process.env, COMPASS_ISLES_RUN: run, COMPASS_MIRROR_ORIGIN: mirrorOrigin,
+      COMPASS_MIRROR_PLAYER: player, COMPASS_MIRROR_PASSWORD: launcherPassword,
+      COMPASS_MIRROR_MASTER_PASSWORD: masterPassword,
+    }, stdio: "inherit" });
+    const nativeExit = await new Promise((done, reject) => { native.on("error", reject); native.on("exit", done); });
+    assert.equal(nativeExit, 0, "native desktop acceptance failed");
+    desktop = JSON.parse(await readFile(join(run, "desktop-result.json"), "utf8"));
+  }
   const beforeRevoke = await identity("/authserver/authenticate", { username: player, password: launcherPassword });
   assert.equal(beforeRevoke.status, 200);
   const activeSession = await beforeRevoke.json();
@@ -169,7 +182,7 @@ try {
   assert.equal((await identity("/authserver/authenticate", { username: player, password: launcherPassword })).status, 403, "revoked password accepted");
   assert(reads.filter((path) => path === "/optional.txt").length >= 3, "optional file was not fetched at publication, installation and corrupt-file verification");
   assert.equal(reads.filter((path) => path === "/server.txt").length, 1, "client fetched server-only bytes");
-  const manifest = { publication: "real-isles-packwiz", contentAddressVerified: true, artifactBytes: bytes.length, registration: "verified-through-development-mail-log", masterPasswordAtLauncher: "refused", emailAtLauncher: "refused", revokedCredential: "refused", revokedCredentialSession: "invalidated", mirrorStorage: "isolated-in-memory", ...imported };
+  const manifest = { publication: "real-isles-packwiz", contentAddressVerified: true, artifactBytes: bytes.length, registration: "verified-through-development-mail-log", masterPasswordAtLauncher: "refused", emailAtLauncher: "refused", revokedCredential: "refused", revokedCredentialSession: "invalidated", mirrorStorage: "isolated-in-memory", ...imported, ...(desktop ? { desktop } : {}) };
   await writeFile(join(run, "scenario-result.json"), JSON.stringify(manifest, null, 2));
   console.log(JSON.stringify(manifest));
 } finally {
