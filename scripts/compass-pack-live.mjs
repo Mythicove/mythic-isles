@@ -163,6 +163,9 @@ try {
   // same core scenario. The companion uses the workspace's existing Playwright.
   let desktop;
   if (process.env.COMPASS_EXE) {
+    // Restore the publisher's original bytes after the deliberate corruption
+    // probe, so a fresh desktop installation reads the published content.
+    sources.set("/optional.txt", "optional client file\n");
     const native = spawn(process.execPath, [join(root, "../web/e2e/compass-desktop-live.mjs")], { env: {
       ...process.env, COMPASS_ISLES_RUN: run, COMPASS_MIRROR_ORIGIN: mirrorOrigin,
       COMPASS_MIRROR_PLAYER: player, COMPASS_MIRROR_PASSWORD: launcherPassword,
